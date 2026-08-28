@@ -1,8 +1,14 @@
-import { Controller, Get, Query, Param, Patch, Body } from '@nestjs/common';
+import { Controller, Get, Query, Param, Patch, Body, HttpException, HttpStatus } from '@nestjs/common';
 import { QuestionDto } from './dto/question.dto.js';
 
 @Controller('question')
 export class QuestionController {
+  @Get('test')
+  getTest(): string {
+    throw new HttpException('获取数据失败', HttpStatus.BAD_REQUEST);
+    // return 'question Test';
+  }
+
   @Get()
   findAll(
     @Query('keyword') keyword: string,
@@ -25,11 +31,6 @@ export class QuestionController {
       desc: 'bbb',
     };
   }
-
-  // @Get('test')
-  // getTest(): string {
-  //   return 'question Test';
-  // }
 
   @Patch(':id')
   update(@Param('id') id: string,
