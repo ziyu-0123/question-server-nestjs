@@ -1,9 +1,12 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { UserService } from '../user/user.service.js';
-
+import { JwtService } from '@nestjs/jwt';
 @Injectable()
 export class AuthService {
-  constructor(private readonly userService: UserService) { }
+  constructor(
+    private readonly userService: UserService,
+    private readonly jwtService: JwtService,
+  ) {}
 
   async signIn(username: string, password: string) {
     const user = await this.userService.findOne({ username, password });
@@ -13,6 +16,8 @@ export class AuthService {
 
     const { password: p, ...userInfo } = user.toObject(); // 排除密码字段
 
-    return userInfo; // 返回用户信息
+    // return userInfo; // 返回用户信息
+    const token = this.jwtService.sign(userInfo);
+    return { token };
   }
 }

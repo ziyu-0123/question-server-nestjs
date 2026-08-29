@@ -1,4 +1,4 @@
-import { Controller,Post,Body } from '@nestjs/common';
+import { Controller, Post, Body } from '@nestjs/common';
 import { AuthService } from './auth.service.js';
 import { CreateUserDto } from '../user/dto/create-user.dto.js';
 
@@ -8,7 +8,7 @@ export class AuthController {
 
   @Post('login')
   async login(@Body() userInfo: CreateUserDto) {
-    const {username,password} = userInfo;
+    const { username, password } = userInfo;
 
     return await this.authService.signIn(username, password);
   }
