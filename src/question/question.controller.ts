@@ -1,12 +1,22 @@
-import { Controller, Get, Query, Param, Patch, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Query, Post,Param, Patch, Body, HttpException, HttpStatus } from '@nestjs/common';
 import { QuestionDto } from './dto/question.dto.js';
+import { QuestionService } from './question.service.js';
 
 @Controller('question')
 export class QuestionController {
+  constructor(
+    private readonly questionService: QuestionService,
+  ) { }
+
   @Get('test')
   getTest(): string {
     throw new HttpException('获取数据失败', HttpStatus.BAD_REQUEST);
     // return 'question Test';
+  }
+
+  @Post()
+  create() {
+    return this.questionService.create();
   }
 
   @Get()
@@ -25,11 +35,7 @@ export class QuestionController {
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return {
-      id,
-      title: 'aaa',
-      desc: 'bbb',
-    };
+    return this.questionService.findOne(id);
   }
 
   @Patch(':id')
