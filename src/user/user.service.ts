@@ -16,8 +16,8 @@ export class UserService {
     return await createdUser.save();
   }
 
-  async findOne(username: string, password: string) {
-    return await this.userModel.findOne({ username, password });
+  async findOne(query: { username: string; password: string }) {
+    return await this.userModel.findOne(query);
   }
 }
 

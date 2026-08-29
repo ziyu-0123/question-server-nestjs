@@ -10,6 +10,7 @@ import {User, UserSchema} from './schemas/user.schema.js';
       { name: User.name, schema: UserSchema },
     ]),
   ],
+  exports: [UserService],
   providers: [UserService],
   controllers: [UserController]
 })
