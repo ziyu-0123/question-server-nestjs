@@ -1,12 +1,21 @@
-import { Controller, Get, Query, Post,Param, Patch, Body, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Delete,
+  Query,
+  Post,
+  Param,
+  Patch,
+  Body,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { QuestionDto } from './dto/question.dto.js';
 import { QuestionService } from './question.service.js';
 
 @Controller('question')
 export class QuestionController {
-  constructor(
-    private readonly questionService: QuestionService,
-  ) { }
+  constructor(private readonly questionService: QuestionService) { }
 
   @Get('test')
   getTest(): string {
@@ -20,16 +29,19 @@ export class QuestionController {
   }
 
   @Get()
-  findAll(
+  async findAll(
     @Query('keyword') keyword: string,
     @Query('page') page: number,
     @Query('pageSize') pageSize: number,
   ) {
-    console.log(keyword, page, pageSize);
+
+    const list = await this.questionService.findAllList({ keyword, page, pageSize });
+
+    const count = await this.questionService.count({ keyword });
 
     return {
-      list: ['a', 'b', 'c'],
-      count: 10,
+      list,
+      count,
     };
   }
 
@@ -39,14 +51,12 @@ export class QuestionController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string,
-    @Body() questionDto: QuestionDto,
-  ) {
-    console.log(questionDto);
-    return {
-      id,
-      title: 'aaa',
-      desc: 'bbb',
-    };
+  updateOne(@Param('id') id: string, @Body() questionDto: QuestionDto) {
+    return this.questionService.update(id, questionDto);
+  }
+
+  @Delete(':id')
+  deleteOne(@Param('id') id: string) {
+    return this.questionService.delete(id);
   }
 }
