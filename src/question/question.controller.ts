@@ -97,4 +97,13 @@ export class QuestionController {
     const { ids = [] } = body;
     return this.questionService.deleteMany(ids, username);
   }
+
+  @Post('duplicate/:id')
+  duplicate(
+    @Param('id') id: string,
+    @Req() req: Request & { user: { username: string } },
+  ) {
+    const { username } = req.user;
+    return this.questionService.duplicate(id, username);
+  }
 }

@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Question, QuestionDocument } from './schemas/question.schema.js';
 import { QuestionDto } from './dto/question.dto.js';
 import { nanoid } from 'nanoid';
@@ -104,5 +104,27 @@ export class QuestionService {
       whereOpt.title = { $regex: reg }; //忽略大小写查询
     }
     return await this.questionModel.countDocuments(whereOpt);
+  }
+
+  async duplicate(id: string, author: string) {
+    const question = await this.questionModel.findById(id);
+    if (!question) {
+      throw new NotFoundException('问卷不存在');
+    }
+    const newQuestion = new this.questionModel({
+      ...question.toObject(),
+      _id: new Types.ObjectId(),
+      title: question.title + '副本',
+      author,
+      isPublished: false,
+      isStar: false,
+      componentList: question.componentList.map((item) => {
+        return {
+          ...item,
+          fe_id: nanoid(),
+        };
+      }),
+    });
+    return await newQuestion.save();
   }
 }
