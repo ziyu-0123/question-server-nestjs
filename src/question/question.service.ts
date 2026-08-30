@@ -11,8 +11,9 @@ export class QuestionService {
     private readonly questionModel: Model<QuestionDocument>,
   ) {}
 
-  async create() {
+  async create(username: string) {
     const question = new this.questionModel({
+      author: username,
       title: 'title' + Date.now(),
       desc: 'desc',
     });
