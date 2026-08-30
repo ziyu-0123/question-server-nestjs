@@ -7,6 +7,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api'); // 路由全局前缀
   app.useGlobalInterceptors(new TransformInterceptor()); // 全局响应拦截器
   app.useGlobalFilters(new HttpExceptionFilter()); // 全局异常过滤器
+  app.enableCors(); // 跨域
   await app.listen(process.env.PORT ?? 3005);
 }
 await bootstrap();
