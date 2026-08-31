@@ -28,6 +28,9 @@ export class Question {
   @Prop({default: false})
   isDeleted: boolean;
 
+  @Prop({default: 0})
+  answerCount: number;
+
   @Prop({required: true})
   author: string;
 
