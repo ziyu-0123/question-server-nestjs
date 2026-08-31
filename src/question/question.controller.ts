@@ -38,7 +38,7 @@ export class QuestionController {
     @Query('page') page: number,
     @Query('pageSize') pageSize: number,
     @Query('isDeleted') isDeleted: boolean = false,
-    @Query('isStar') isStar: boolean = false,
+    @Query('isStar') isStar: boolean | null = null,
     @Req() req: Request & { user: { username: string } },
   ) {
     const { username } = req.user;
