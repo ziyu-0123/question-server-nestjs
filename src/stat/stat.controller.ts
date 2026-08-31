@@ -2,7 +2,7 @@ import { Controller, Get, Param, Query } from '@nestjs/common';
 import { StatService } from './stat.service.js';
 @Controller('stat')
 export class StatController {
-  constructor(private readonly statService: StatService) {}
+  constructor(private readonly statService: StatService) { }
 
   @Get(':questionId')
   async getQuestionStat(
@@ -25,6 +25,6 @@ export class StatController {
       questionId,
       componentFeId,
     );
-    return stat;
+    return { stat };
   }
 }
