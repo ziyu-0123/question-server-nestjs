@@ -1,12 +1,30 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { StatService } from './stat.service.js'
+import { StatService } from './stat.service.js';
 @Controller('stat')
 export class StatController {
-  constructor(private readonly statService: StatService) { }
+  constructor(private readonly statService: StatService) {}
 
   @Get(':questionId')
-  async getQuestionStat(@Param('questionId') questionId: string, @Query('page') page: number = 1, @Query('pageSize') pageSize: number = 10) {
+  async getQuestionStat(
+    @Param('questionId') questionId: string,
+    @Query('page') page: number = 1,
+    @Query('pageSize') pageSize: number = 10,
+  ) {
+    return this.statService.getQuestionStatListAndCount(questionId, {
+      page,
+      pageSize,
+    });
+  }
 
-    return this.statService.getQuestionStatListAndCount(questionId, { page, pageSize })
+  @Get(':questionId/:componentFeId')
+  async getComponentStat(
+    @Param('questionId') questionId: string,
+    @Param('componentFeId') componentFeId: string,
+  ) {
+    const stat = await this.statService.getComponentStat(
+      questionId,
+      componentFeId,
+    );
+    return stat;
   }
 }
