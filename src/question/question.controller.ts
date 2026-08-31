@@ -14,10 +14,11 @@ import {
 import { type Request } from 'express';
 import { QuestionDto } from './dto/question.dto.js';
 import { QuestionService } from './question.service.js';
+import { Public } from '../auth/decorators/public.decorator.js';
 
 @Controller('question')
 export class QuestionController {
-  constructor(private readonly questionService: QuestionService) {}
+  constructor(private readonly questionService: QuestionService) { }
 
   // @Get('test')
   // getTest(): string {
@@ -64,6 +65,7 @@ export class QuestionController {
     };
   }
 
+  @Public()
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.questionService.findOne(id);
