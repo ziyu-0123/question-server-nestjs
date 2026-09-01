@@ -19,7 +19,9 @@ export class UserService {
   ) { }
 
   async create(userData: CreateUserDto) {
-    const createdUser = new this.userModel(userData);
+    // 只取注册业务字段入库，防止 body 夹带 aiConfig 等任意字段
+    const { username, password, nickname } = userData;
+    const createdUser = new this.userModel({ username, password, nickname });
     return await createdUser.save();
   }
 

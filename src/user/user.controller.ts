@@ -22,7 +22,9 @@ export class UserController {
   @Post('register')
   async register(@Body() userDto: CreateUserDto) {
     try {
-      return await this.userService.create(userDto);
+      const user = await this.userService.create(userDto);
+      // 不回显完整用户文档（含明文 password），只返回非敏感字段
+      return { username: user.username, nickname: user.nickname };
     } catch (err) {
       throw new HttpException(
         err instanceof Error ? err.message : String(err),

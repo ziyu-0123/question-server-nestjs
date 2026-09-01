@@ -14,7 +14,9 @@ export class AnswerService {
     if (answerInfo.questionId == null) {
       throw new HttpException('缺少问卷 id', HttpStatus.BAD_REQUEST);
     }
-    const answer = new this.answerModel(answerInfo);
+    // 只取答卷业务字段入库，防止 body 夹带任意脏字段
+    const { questionId, answerList } = answerInfo;
+    const answer = new this.answerModel({ questionId, answerList });
     return await answer.save();
   }
 

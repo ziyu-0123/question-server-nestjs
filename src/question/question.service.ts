@@ -55,8 +55,27 @@ export class QuestionService {
     return res;
   }
 
+  // 允许更新的问卷字段白名单：body 只取这些字段入库，
+  // 防止客户端注入 author / _id 等字段篡改归属或写入脏数据
+  static readonly UPDATABLE_FIELDS = [
+    'title',
+    'desc',
+    'js',
+    'css',
+    'isPublished',
+    'isStar',
+    'isDeleted',
+    'componentList',
+  ] as const;
+
   async update(id: string, updateData: QuestionDto, author: string) {
-    return await this.questionModel.updateOne({ _id: id, author }, updateData);
+    const $set: Partial<Record<(typeof QuestionService.UPDATABLE_FIELDS)[number], unknown>> = {};
+    for (const key of QuestionService.UPDATABLE_FIELDS) {
+      if (updateData[key] !== undefined) {
+        $set[key] = updateData[key];
+      }
+    }
+    return await this.questionModel.updateOne({ _id: id, author }, { $set });
   }
 
   async findOne(id: string) {
