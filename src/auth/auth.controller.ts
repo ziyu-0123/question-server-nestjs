@@ -18,7 +18,7 @@ export class AuthController {
 
   // @UseGuards(AuthGuard)
   @Get('profile')
-  async getProfile(@Req() req: Request & { user: unknown }) {
-    return req.user;
+  async getProfile(@Req() req: Request & { user: { username: string } }) {
+    return await this.authService.getProfile(req.user.username);
   }
 }
