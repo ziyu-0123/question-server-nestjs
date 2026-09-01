@@ -38,25 +38,30 @@ export class UserService {
    */
   async updateAiConfig(username: string, aiConfig: AiConfigDto) {
     const { apiKey = '', baseUrl = '', model = '' } = aiConfig ?? {};
-    if (!apiKey || !baseUrl || !model) {
-      throw new BadRequestException('apiKey、baseUrl、model 均不能为空');
+    if (!baseUrl || !model) {
+      throw new BadRequestException('baseUrl、model 均不能为空');
     }
     if (!/^https:\/\//.test(baseUrl)) {
       throw new BadRequestException('baseUrl 必须以 https:// 开头');
     }
 
-    const user = await this.userModel.findOneAndUpdate(
-      { username },
-      { $set: { aiConfig: { apiKey, baseUrl, model } } },
-      { new: true },
-    );
+    const user = await this.userModel.findOne({ username });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
 
+    // apiKey 留空表示沿用原值（前端只回显打码值，不回传明文）；从未配置则必须填写
+    const finalApiKey = apiKey || user.aiConfig?.apiKey;
+    if (!finalApiKey) {
+      throw new BadRequestException('请填写 API Key');
+    }
+
+    user.aiConfig = { apiKey: finalApiKey, baseUrl, model };
+    await user.save();
+
     // 只回显打码后的配置，避免明文 apiKey 出现在响应中
     return {
-      apiKey: maskApiKey(apiKey),
+      apiKey: maskApiKey(finalApiKey),
       baseUrl,
       model,
     };
