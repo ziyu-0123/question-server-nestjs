@@ -8,6 +8,7 @@ import { UserModule } from './user/user.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { AnswerModule } from './answer/answer.module.js';
 import { StatModule } from './stat/stat.module.js';
+import { AiModule } from './ai/ai.module.js';
 
 @Module({
   imports: [
@@ -23,8 +24,9 @@ import { StatModule } from './stat/stat.module.js';
     AuthModule,
     AnswerModule,
     StatModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }
