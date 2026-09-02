@@ -46,7 +46,8 @@ const questionCheckboxProps = z.object({
 });
 
 // 按 type 区分 props 结构（discriminated union）
-const componentSchema = z.discriminatedUnion('type', [
+// 供"生成问卷"与"单题优化"共用：前者校验 componentList，后者校验入参 component
+export const componentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('questionInfo'), props: questionInfoProps }),
   z.object({ type: z.literal('questionTitle'), props: questionTitleProps }),
   z.object({ type: z.literal('questionParagraph'), props: questionParagraphProps }),
@@ -54,7 +55,18 @@ const componentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('questionTextarea'), props: questionTextareaProps }),
   z.object({ type: z.literal('questionRadio'), props: questionRadioProps }),
   z.object({ type: z.literal('questionCheckbox'), props: questionCheckboxProps }),
-]);
+])
+
+// 各组件类型的 props schema 映射，供按入参 type 选取（如单题优化的输出校验）
+export const propsSchemas: Record<string, z.ZodTypeAny> = {
+  questionInfo: questionInfoProps,
+  questionTitle: questionTitleProps,
+  questionParagraph: questionParagraphProps,
+  questionInput: questionInputProps,
+  questionTextarea: questionTextareaProps,
+  questionRadio: questionRadioProps,
+  questionCheckbox: questionCheckboxProps,
+};
 
 // LLM 完整输出：{ title, desc, componentList }
 export const generateQuestionSchema = z.object({
@@ -64,3 +76,5 @@ export const generateQuestionSchema = z.object({
 });
 
 export type GenerateQuestionResult = z.infer<typeof generateQuestionSchema>;
+
+export type ComponentInput = z.infer<typeof componentSchema>;
