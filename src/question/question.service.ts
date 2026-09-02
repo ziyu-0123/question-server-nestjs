@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Question, QuestionDocument } from './schemas/question.schema.js';
+import { Question, QuestionDocument, QuestionTranslation } from './schemas/question.schema.js';
 import { Answer, AnswerDocument } from '../answer/schemas/answer.schema.js';
 import { QuestionDto } from './dto/question.dto.js';
 import { nanoid } from 'nanoid';
@@ -82,6 +82,32 @@ export class QuestionService {
     return await this.questionModel.findById(id);
   }
 
+  // 支持的语言码白名单（与前端语言下拉一致，防脏 key 写入 translations）
+  static readonly TRANSLATION_LANGS = ['en', 'ja', 'ko', 'fr', 'es', 'ru'] as const;
+
+  async updateTranslations(
+    id: string,
+    author: string,
+    lang: string,
+    translation: QuestionTranslation,
+  ) {
+    if (!(QuestionService.TRANSLATION_LANGS as readonly string[]).includes(lang)) {
+      throw new BadRequestException('不支持的目标语言');
+    }
+    if (!translation || typeof translation !== 'object' || !translation.texts) {
+      throw new BadRequestException('译文数据不合法');
+    }
+    const res = await this.questionModel.updateOne(
+      { _id: id, author },
+      { $set: { [`translations.${lang}`]: translation } },
+    );
+    if (res.matchedCount === 0) {
+      // 新接口无历史包袱：非作者（或问卷不存在）显式 403，优于 update 的静默 no-op
+      throw new ForbiddenException('无权操作该问卷');
+    }
+    return null;
+  }
+
   async findAllList({
     keyword = '',
     page = 1,
@@ -155,6 +181,8 @@ export class QuestionService {
       author,
       isPublished: false,
       isStar: false,
+      // 复制时全量重新生成 fe_id，继承的 texts 全部变孤儿死数据，译文不继承
+      translations: undefined,
       componentList: question.componentList.map((item) => {
         return {
           ...item,

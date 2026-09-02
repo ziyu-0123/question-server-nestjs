@@ -6,6 +6,7 @@ import {
   Post,
   Param,
   Patch,
+  Put,
   Body,
   Req,
   HttpException,
@@ -14,6 +15,7 @@ import {
 import { type Request } from 'express';
 import { QuestionDto } from './dto/question.dto.js';
 import { QuestionService } from './question.service.js';
+import { type QuestionTranslation } from './schemas/question.schema.js';
 import { Public } from '../auth/decorators/public.decorator.js';
 
 @Controller('question')
@@ -79,6 +81,26 @@ export class QuestionController {
   ) {
     const { username } = req.user;
     return this.questionService.update(id, questionDto, username);
+  }
+
+  /**
+   * 保存某语言的整卷译文（需登录 + 仅作者；已有译文覆盖更新）
+   * 入参: Body { lang: string, translation: { title, desc, texts } }，lang 限 en/ja/ko/fr/es/ru
+   * 返回: { errno: 0, data: null }；非作者 403；lang 非白名单或译文非法 400
+   */
+  @Put(':id/translations')
+  updateTranslations(
+    @Param('id') id: string,
+    @Body() body: { lang: string; translation: QuestionTranslation },
+    @Req() req: Request & { user: { username: string } },
+  ) {
+    const { username } = req.user;
+    return this.questionService.updateTranslations(
+      id,
+      username,
+      body?.lang,
+      body?.translation,
+    );
   }
 
   @Delete(':id')
