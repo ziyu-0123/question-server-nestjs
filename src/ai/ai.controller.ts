@@ -52,4 +52,22 @@ export class AiController {
       body?.question,
     );
   }
+
+  /**
+   * AI 总结开放式问题的答案（意见聚类 + 情感分析，纯生成，不落库）
+   * 入参: Body { questionId: 问卷 id, componentId: 开放式组件 fe_id }，需登录（Bearer token，须为问卷作者）
+   * 返回: { summary, totalCount, themes: [{ label, count, description }], sentiment: { positive, negative, neutral } }
+   * 错误: 400 参数不合法 / 请先配置 / 组件不存在 / 该题目不是开放式问题 / 该题目暂无有效答案；403 非作者；404 问卷不存在
+   */
+  @Post('summarize-answers')
+  async summarizeAnswers(
+    @Req() req: Request & { user: { username: string } },
+    @Body() body: { questionId: string; componentId: string },
+  ) {
+    return await this.aiService.summarizeAnswers(
+      req.user.username,
+      body?.questionId,
+      body?.componentId,
+    );
+  }
 }

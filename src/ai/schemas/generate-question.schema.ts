@@ -88,4 +88,29 @@ export type GenerateQuestionResult = z.infer<typeof generateQuestionSchema>;
 
 export type TranslateQuestionResult = z.infer<typeof translateQuestionSchema>;
 
+// AI 总结开放式答案的输出契约（聚类 + 情感一次产出）
+// themes min(1) 而非 3：模型偶尔只聚出 2 类也放行，比硬卡数量触发重试更稳
+// sentiment 不做总和校验：估算值卡死反而浪费重试
+export const summarizeAnswersSchema = z.object({
+  summary: z.string().min(1),
+  totalCount: z.number().int().nonnegative(),
+  themes: z
+    .array(
+      z.object({
+        label: z.string().min(1),
+        count: z.number().int().nonnegative(),
+        description: z.string(),
+      }),
+    )
+    .min(1)
+    .max(8),
+  sentiment: z.object({
+    positive: z.number().int().nonnegative(),
+    negative: z.number().int().nonnegative(),
+    neutral: z.number().int().nonnegative(),
+  }),
+});
+
+export type SummarizeAnswersResult = z.infer<typeof summarizeAnswersSchema>;
+
 export type ComponentInput = z.infer<typeof componentSchema>;

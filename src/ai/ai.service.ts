@@ -1,17 +1,21 @@
-import { Injectable, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import OpenAI from 'openai';
 import { APIConnectionTimeoutError, AuthenticationError, BadRequestError } from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { UserService } from '../user/user.service.js';
+import { QuestionService } from '../question/question.service.js';
+import { AnswerService } from '../answer/answer.service.js';
 import {
   generateQuestionSchema,
   componentSchema,
   propsSchemas,
   translateQuestionSchema,
+  summarizeAnswersSchema,
   type GenerateQuestionResult,
   type TranslateQuestionResult,
+  type SummarizeAnswersResult,
   type ComponentInput,
 } from './schemas/generate-question.schema.js';
 
@@ -110,9 +114,34 @@ ${COMPONENT_CONTRACT}
 - 顶层 title/desc 与第一个 questionInfo 组件的 title/desc 译文保持一致
 - 译文自然地道，符合问卷调查语域；数字、单位、专有名词处理合理`;
 
+const SUMMARIZE_SYSTEM_PROMPT = `你是问卷数据分析助手，负责对开放式问题的答案做意见聚类和情感分析。
+
+【输出契约】
+只输出一个 JSON 对象，结构为：
+{
+  "summary": "一段话总体结论（100 字以内，概括答案反映的主要情况和倾向）",
+  "totalCount": 有效答案总条数（即输入中标注的 totalCount，原样返回）",
+  "themes": [
+    { "label": "意见类别名（10 字以内）", "count": 该类条数, "description": "该类意见概述，并摘录 1~2 条典型原话" },
+    ...
+  ],
+  "sentiment": { "positive": 正面条数, "negative": 负面条数, "neutral": 中性条数 }
+}
+禁止输出 JSON 以外的任何文字（包括解释、markdown 代码块标记）。
+
+【分析规则】
+- themes 聚 3~6 类，按 count 从大到小排列；每条答案的"出现次数"要计入对应类别的 count
+- 灌水、纯符号、无实际观点的答案归入一个"无有效观点"类正常输出
+- themes 各 count 之和 ≈ totalCount；sentiment 三项之和 ≈ totalCount（按对答案的整体理解估算，允许小幅出入）
+- 全部使用简体中文；不要发明答案中没有的信息`;
+
 @Injectable()
 export class AiService {
-  constructor(private readonly userService: UserService) { }
+  constructor(
+    private readonly userService: UserService,
+    private readonly questionService: QuestionService,
+    private readonly answerService: AnswerService,
+  ) { }
 
   /**
    * 根据需求描述生成问卷（纯生成，不落库）
@@ -209,6 +238,106 @@ export class AiService {
       translateQuestionSchema,
     );
     return result;
+  }
+
+  /**
+   * AI 总结开放式问题的答案（聚类 + 情感，纯生成，不落库）
+   * 入参: username（登录态用户，须为问卷作者）、questionId、componentId（开放式组件 fe_id）
+   * 返回: { summary, totalCount, themes, sentiment }
+   */
+  async summarizeAnswers(
+    username: string,
+    questionId: string,
+    componentId: string,
+  ): Promise<SummarizeAnswersResult> {
+    if (!questionId?.trim() || !componentId?.trim()) {
+      throw new BadRequestException('参数不合法');
+    }
+
+    const question = await this.questionService.findOne(questionId);
+    if (!question) {
+      throw new NotFoundException('问卷不存在');
+    }
+    if (question.author !== username) {
+      throw new ForbiddenException('无权操作该问卷');
+    }
+
+    const comp = (question.componentList ?? []).find(
+      (c) => c.fe_id === componentId,
+    );
+    if (!comp) {
+      throw new BadRequestException('组件不存在');
+    }
+    if (comp.type !== 'questionInput' && comp.type !== 'questionTextarea') {
+      throw new BadRequestException('该题目不是开放式问题');
+    }
+
+    // 提取并预处理答案：空值过滤 → 相同文本合并计数 → 取最新 200 条 → 单条截断 200 字
+    const answerTotal = await this.answerService.count(questionId);
+    if (answerTotal === 0) {
+      throw new BadRequestException('该题目暂无有效答案');
+    }
+    const answers = await this.answerService.findAll(questionId, {
+      page: 1,
+      pageSize: answerTotal,
+    });
+
+    // key=答案原文；order 记录最后一次出现的顺序（越大越新），用于"取最新"
+    const merged = new Map<string, { text: string; repeat: number; order: number }>();
+    let order = 0;
+    for (const answer of answers) {
+      for (const item of answer.answerList ?? []) {
+        if (item.componentId !== componentId) continue;
+        const text = (item.value ?? '').trim();
+        if (!text) continue;
+        order++;
+        const existing = merged.get(text);
+        if (existing) {
+          existing.repeat++;
+          existing.order = order;
+        } else {
+          merged.set(text, { text, repeat: 1, order });
+        }
+      }
+    }
+
+    // totalCount 含重复（与统计页表格行数一致），是给模型和前端的口径
+    const totalCount = [...merged.values()].reduce(
+      (sum, item) => sum + item.repeat,
+      0,
+    );
+    if (totalCount === 0) {
+      throw new BadRequestException('该题目暂无有效答案');
+    }
+    const items = [...merged.values()]
+      .sort((a, b) => b.order - a.order)
+      .slice(0, 200)
+      .map((item) => ({ text: item.text.slice(0, 200), repeat: item.repeat }));
+
+    const { apiKey, baseUrl, model } = await this.requireAiConfig(username);
+    const title = (comp.props as { title?: string })?.title ?? '';
+
+    const answerLines = items
+      .map(
+        (item, i) =>
+          `${i + 1}. ${JSON.stringify(item.text)}${item.repeat > 1 ? `（出现 ${item.repeat} 次）` : ''}`,
+      )
+      .join('\n');
+
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `题目：${title}\n有效答案共 ${totalCount} 条（完全相同的答案已合并并标注出现次数）：\n${answerLines}`,
+      },
+    ];
+
+    return await this.chatWithRetry(
+      this.createClient(apiKey, baseUrl),
+      model,
+      messages,
+      summarizeAnswersSchema,
+    );
   }
 
   // 读取用户 AI 配置，未配置时抛出带引导的 400
