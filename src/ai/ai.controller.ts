@@ -35,4 +35,21 @@ export class AiController {
       body?.instruction,
     );
   }
+
+  /**
+   * 整卷翻译为指定目标语言（纯生成，不落库）
+   * 入参: Body { targetLang: string, question: { title, desc, componentList } }，需登录（Bearer token）
+   * 返回: 与入参同构的译文 { title, desc, componentList: [{ type, props }] }（仅文案为译文）
+   */
+  @Post('translate-question')
+  async translateQuestion(
+    @Req() req: Request & { user: { username: string } },
+    @Body() body: { targetLang: string; question: unknown },
+  ) {
+    return await this.aiService.translateQuestion(
+      req.user.username,
+      body?.targetLang,
+      body?.question,
+    );
+  }
 }

@@ -9,7 +9,9 @@ import {
   generateQuestionSchema,
   componentSchema,
   propsSchemas,
+  translateQuestionSchema,
   type GenerateQuestionResult,
+  type TranslateQuestionResult,
   type ComponentInput,
 } from './schemas/generate-question.schema.js';
 
@@ -88,6 +90,26 @@ ${COMPONENT_CONTRACT}
 - 选项只写 text 字段，不要生成 value 字段（系统自动生成）
 - 文案使用简体中文`;
 
+const TRANSLATE_SYSTEM_PROMPT = `你是专业问卷翻译，负责把问卷从原语言翻译成用户指定的目标语言。
+
+【输出契约】
+只输出一个 JSON 对象，结构为：
+{
+  "title": "问卷标题译文",
+  "desc": "问卷描述译文",
+  "componentList": [ { "type": "组件类型", "props": { ... } }, ... ]
+}
+componentList 与输入完全同构：组件数量、顺序、type 一一对应，禁止增删组件或改变顺序。
+禁止输出 JSON 以外的任何文字（包括解释、markdown 代码块标记）。
+
+${COMPONENT_CONTRACT}
+
+【翻译规则】
+- 只翻译文案字段（title / desc / text / placeholder / 选项的 text）；level、isCenter、isVertical 等布局字段原样保留
+- 选项逐条对应翻译，不增不减，严格保持数组顺序；只写 text 字段，不要生成 value 字段
+- 顶层 title/desc 与第一个 questionInfo 组件的 title/desc 译文保持一致
+- 译文自然地道，符合问卷调查语域；数字、单位、专有名词处理合理`;
+
 @Injectable()
 export class AiService {
   constructor(private readonly userService: UserService) { }
@@ -138,9 +160,8 @@ export class AiService {
       { role: 'system', content: OPTIMIZE_SYSTEM_PROMPT },
       {
         role: 'user',
-        content: `请优化以下问卷组件：\n${JSON.stringify({ type, props })}${
-          instruction?.trim() ? `\n\n优化要求：${instruction.trim()}` : ''
-        }`,
+        content: `请优化以下问卷组件：\n${JSON.stringify({ type, props })}${instruction?.trim() ? `\n\n优化要求：${instruction.trim()}` : ''
+          }`,
       },
     ];
 
@@ -155,6 +176,39 @@ export class AiService {
     const newProps = result.props as Record<string, unknown>;
     this.normalizeOptions(type, newProps);
     return { props: newProps };
+  }
+
+  /**
+   * 整卷翻译为指定目标语言（纯生成，不落库）
+   * 入参: username（登录态用户）、targetLang（目标语言）、question（原问卷投影 { title, desc, componentList }）
+   * 返回: 与入参同构的译文（仅文案字段为译文，不跑 normalizeOptions——
+   *       翻译输出只被前端抽取 text 构建 texts，value 不会被使用）
+   */
+  async translateQuestion(username: string, targetLang: string, question: unknown) {
+    if (!targetLang?.trim()) {
+      throw new BadRequestException('请选择目标语言');
+    }
+    const input = translateQuestionSchema.safeParse(question);
+    if (!input.success) {
+      throw new BadRequestException('问卷数据不合法，请刷新页面后重试');
+    }
+    const { apiKey, baseUrl, model } = await this.requireAiConfig(username);
+
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: TRANSLATE_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `目标语言：${targetLang.trim()}\n请翻译以下问卷：\n${JSON.stringify(input.data)}`,
+      },
+    ];
+
+    const result: TranslateQuestionResult = await this.chatWithRetry(
+      this.createClient(apiKey, baseUrl),
+      model,
+      messages,
+      translateQuestionSchema,
+    );
+    return result;
   }
 
   // 读取用户 AI 配置，未配置时抛出带引导的 400

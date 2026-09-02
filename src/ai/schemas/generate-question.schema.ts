@@ -75,6 +75,17 @@ export const generateQuestionSchema = z.object({
   componentList: z.array(componentSchema).min(3),
 });
 
+// 多语言翻译的输入/输出结构：与原问卷同构，仅文案字段变译文。
+// 无 min(3)——翻译不设组件数门槛；入参与输出共用（zod strip 自动剥离
+// props 中的 value/checked 等结构字段，进提示词的天然是纯文案投影）
+export const translateQuestionSchema = z.object({
+  title: z.string().min(1),
+  desc: z.string(),
+  componentList: z.array(componentSchema),
+});
+
 export type GenerateQuestionResult = z.infer<typeof generateQuestionSchema>;
+
+export type TranslateQuestionResult = z.infer<typeof translateQuestionSchema>;
 
 export type ComponentInput = z.infer<typeof componentSchema>;
