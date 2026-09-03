@@ -8,10 +8,16 @@ export class Answer {
   @Prop({ required: true })
   questionId: string;
 
-  @Prop({ required: true })
-  answerList: {
+  @Prop()
+  answerList?: {
     componentId: string;
     value: string;
-  }[]
+  }[];
+
+  @Prop()
+  conversationList?: {
+    role: 'interviewer' | 'interviewee';
+    content: string;
+  }[];
 }
 export const AnswerSchema = SchemaFactory.createForClass(Answer);

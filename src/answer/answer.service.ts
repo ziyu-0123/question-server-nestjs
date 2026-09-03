@@ -14,9 +14,13 @@ export class AnswerService {
     if (answerInfo.questionId == null) {
       throw new HttpException('缺少问卷 id', HttpStatus.BAD_REQUEST);
     }
+    // 答卷内容至少其一：问卷答卷用 answerList，访谈答卷用 conversationList
+    if (answerInfo.answerList == null && answerInfo.conversationList == null) {
+      throw new HttpException('缺少答卷内容', HttpStatus.BAD_REQUEST);
+    }
     // 只取答卷业务字段入库，防止 body 夹带任意脏字段
-    const { questionId, answerList } = answerInfo;
-    const answer = new this.answerModel({ questionId, answerList });
+    const { questionId, answerList, conversationList } = answerInfo;
+    const answer = new this.answerModel({ questionId, answerList, conversationList });
     return await answer.save();
   }
 

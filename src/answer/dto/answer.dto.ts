@@ -3,7 +3,13 @@ export interface AnswerItem {
   value: string;
 }
 
+export interface ConversationItem {
+  role: 'interviewer' | 'interviewee';
+  content: string;
+}
+
 export class CreateAnswerDto {
   readonly questionId: string;
-  readonly answerList: AnswerItem[];
+  readonly answerList?: AnswerItem[];
+  readonly conversationList?: ConversationItem[];
 }
