@@ -499,6 +499,104 @@ export class AiService {
     );
   }
 
+  /**
+   * 校验访谈流式请求并准备流式上下文（纯生成，不落库）
+   * 入参: questionId、history（完整对话记录，含当轮用户回答）
+   * 返回: 流式闭包 (onDelta) => Promise<void>，供 controller 设置 SSE 头后调用
+   * 错误: 400 参数不合法 / 不是访谈问卷 / 未发布 / 超轮次 / 创建者未配置；404 问卷不存在
+   */
+  async prepareInterviewStream(
+    questionId: string,
+    history: { role: string; content: string }[],
+  ): Promise<(onDelta: (text: string) => void) => Promise<void>> {
+    if (!questionId?.trim()) {
+      throw new BadRequestException('参数不合法');
+    }
+    const question = await this.questionService.findOne(questionId);
+    if (!question) {
+      throw new NotFoundException('问卷不存在');
+    }
+    if (question.type !== 'interview') {
+      throw new BadRequestException('该问卷不是访谈问卷');
+    }
+    if (!question.isPublished) {
+      throw new BadRequestException('该问卷尚未发布');
+    }
+    // 轮次上限 20：按受访者已回答轮次计数
+    const answeredRounds = (history ?? []).filter((m) => m.role === 'interviewee').length;
+    if (answeredRounds >= 20) {
+      throw new BadRequestException('访谈已达轮次上限');
+    }
+    const { apiKey, baseUrl, model } = await this.requireAiConfig(question.author);
+
+    const messages = this.buildInterviewMessages(question, history ?? []);
+    const client = this.createClient(apiKey, baseUrl);
+
+    return async (onDelta) => {
+      await this.chatStream(client, model, messages, onDelta);
+    };
+  }
+
+  // 组织访谈对话的 messages：system 含主题/提纲/规则，user 含对话历史或开场指令
+  private buildInterviewMessages(
+    question: {
+      title: string;
+      desc?: string;
+      interviewConfig?: { outline: string[] };
+    },
+    history: { role: string; content: string }[],
+  ): ChatCompletionMessageParam[] {
+    const outline = question.interviewConfig?.outline ?? [];
+    const systemContent = `你是专业的 AI 访谈员，负责对受访者进行一对一访谈。
+
+【访谈主题】
+标题：${question.title ?? ''}
+描述：${question.desc || '无'}
+
+【访谈提纲】（按顺序逐题引导，可结合回答适当追问）
+${outline.length > 0 ? outline.map((q, i) => `${i + 1}. ${q}`).join('\n') : '（无提纲，请围绕访谈主题自然提问）'}
+
+【访谈规则】
+- 一次只问一个问题，等受访者回答后再继续
+- 按提纲顺序推进，提纲问完后做简短总结并礼貌结束
+- 结合受访者回答适当追问细节，但不偏离主题
+- 语气自然、友善、口语化，使用简体中文
+- 不要重复已经问过的问题`;
+
+    const historyText = history
+      .map((m) => `${m.role === 'interviewer' ? '访谈员' : '受访者'}：${m.content}`)
+      .join('\n');
+    const userContent =
+      history.length === 0
+        ? '请开始访谈：先做简短自我介绍，然后提出第一个问题。'
+        : `以下是当前访谈对话记录：\n${historyText}\n\n请继续访谈，提出下一个问题。`;
+
+    return [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent },
+    ];
+  }
+
+  // 流式调用 LLM：逐 chunk 回调增量文本（访谈用，非 JSON 模式）
+  private async chatStream(
+    client: OpenAI,
+    model: string,
+    messages: ChatCompletionMessageParam[],
+    onDelta: (text: string) => void,
+  ): Promise<void> {
+    const stream = await client.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+    });
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content ?? '';
+      if (delta) {
+        onDelta(delta);
+      }
+    }
+  }
+
   // 开放题答案预处理管道（summarizeAnswers 与 analyzeReport 共用）：
   // trim 过滤空串 → 相同文本合并计数（order 记最后一次出现顺序，取最新）→ 限量 → 每条截 200 字
   // totalCount 含重复（与统计页口径一致）；items 为去重后的限量条目

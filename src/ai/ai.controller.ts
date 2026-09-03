@@ -1,6 +1,7 @@
-import { Controller, Post, Body, Req } from '@nestjs/common';
-import { type Request } from 'express';
+import { Controller, Post, Body, Req, Res } from '@nestjs/common';
+import { type Request, type Response } from 'express';
 import { AiService } from './ai.service.js';
+import { Public } from '../auth/decorators/public.decorator.js';
 
 @Controller('ai')
 export class AiController {
@@ -104,5 +105,43 @@ export class AiController {
       body?.title,
       body?.desc,
     );
+  }
+
+  /**
+   * AI 访谈流式对话（SSE，逐字返回 AI 访谈员的回复）
+   * 入参: Body { questionId, history: [{ role, content }] }，公开接口（填写者匿名）
+   * 返回: text/event-stream，逐 chunk 推送 data: <增量文本>，结束推送 data: [DONE]
+   * 错误: 400 参数不合法 / 不是访谈问卷 / 未发布 / 超轮次 / 创建者未配置；404 问卷不存在
+   */
+  @Public()
+  @Post('interview/stream')
+  async interviewStream(
+    @Res() res: Response,
+    @Body() body: { questionId: string; history: { role: string; content: string }[] },
+  ) {
+    // 校验在 service 内完成（失败抛 HttpException，由全局 filter 转 JSON）；
+    // 通过后返回流式闭包，此处才设置 SSE 响应头，绕开全局拦截器/过滤器
+    const stream = await this.aiService.prepareInterviewStream(
+      body?.questionId,
+      body?.history ?? [],
+    );
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    try {
+      await stream((text) => {
+        res.write(`data: ${JSON.stringify(text)}\n\n`);
+      });
+      res.write('data: [DONE]\n\n');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'AI 请求失败';
+      res.write(`event: error\ndata: ${JSON.stringify(message)}\n\n`);
+    } finally {
+      res.end();
+    }
   }
 }
