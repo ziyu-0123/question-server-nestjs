@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException, HttpException, HttpStatus } from '@nestjs/common';
 import OpenAI from 'openai';
 import { APIConnectionTimeoutError, AuthenticationError, BadRequestError } from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
@@ -29,6 +29,16 @@ type NormalizedComponent = {
   isHidden: boolean;
   isLocked: boolean;
   props: Record<string, unknown>;
+};
+
+// 对话式问卷的客户端消息（前端组装，服务端逐条校验后才进入提示词）
+type ChatMsg = { role: 'assistant' | 'user'; content: string };
+
+// SSE 流式下发项（delta 正文 / meta 标记指令 / error 流中错误）
+type ChatStreamItem = {
+  delta?: string;
+  meta?: { skip?: number; end?: boolean; stay?: boolean };
+  error?: string;
 };
 
 // 组件 type → 图层面板显示名（与编辑器 Layers 列表的命名习惯一致）
@@ -155,6 +165,22 @@ const REPORT_SYSTEM_PROMPT = `你是问卷数据分析专家，负责综合整�
 - insights 按题目顺序，每道有数据的题一条；开放题结合答案原声归纳
 - suggestions 2~4 条，针对最突出的问题，具体可操作
 - 全部使用简体中文；只能引用输入中给出的数字与答案，不要发明数据`;
+
+const CHAT_SYSTEM_PROMPT = `你是亲切的问卷访谈员，正在与答卷人逐题对话完成问卷。
+
+【任务】
+根据提供的问卷题目列表与对话进展，发出下一句问话。一次只问一题。
+
+【规则】
+- 用自然、亲切的口吻提问；单选/多选题可自然地列出选项供用户选择
+- 可结合对话中已出现的回答做简短衔接（如"刚才你提到……"），但不要复述全部历史
+- 指定的"当前待问"题目若用户刚回答过：可就其答案追问一次（答案过于简短时引导补充），追问的回复以 [[STAY]] 结尾；无需追问则直接问之后的题目
+- 追问仅限开放题（单行/多行输入），其他题型不要追问
+- 认为剩余题目都无需再问时，回复一句自然的收尾语并以 [[END]] 结尾
+- 建议用户跳过当前非必答题时，回复以 [[SKIP:1]] 结尾
+- 标记（[[STAY]] / [[END]] / [[SKIP:n]]）只能出现在回复最末尾，一次最多一个；除此之外不要输出任何标记、代号或 JSON
+- 必答题（题目列表标注[必答]）不得建议跳过
+- 全部使用简体中文`;
 
 @Injectable()
 export class AiService {
@@ -452,6 +478,288 @@ export class AiService {
       messages,
       reportSchema,
     );
+  }
+
+  // ============ 对话式问卷（C 端匿名访问，用问卷作者的 AI 配置）============
+
+  // 匿名限流：questionId+IP 滑动窗口（60s / 30 次），超出抛 429
+  private rateLimitMap = new Map<string, { count: number; windowStart: number }>();
+
+  checkRateLimit(questionId: string, ip: string) {
+    if (!questionId) return; // 无效参数交给后续校验报 400
+    const key = `${questionId}:${ip}`;
+    const now = Date.now();
+    const entry = this.rateLimitMap.get(key);
+    // 惰性重置：窗口过期即重新计数；Map 不做定时清理（问卷量级下内存可忽略）
+    if (!entry || now - entry.windowStart > 60_000) {
+      this.rateLimitMap.set(key, { count: 1, windowStart: now });
+      return;
+    }
+    entry.count++;
+    if (entry.count > 30) {
+      throw new HttpException('请求过于频繁，请稍后再试', HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
+
+  /**
+   * C 端问卷页判断是否展示"AI 对话模式"入口（@Public）
+   * chatEnabled = 已发布 && 未删除 && 作者已配置 AI && 无译文（对话仅支持主版本中文）
+   */
+  async isChatEnabled(questionId: string) {
+    if (!questionId?.trim()) {
+      throw new BadRequestException('参数不合法');
+    }
+    const question = await this.questionService.findOne(questionId);
+    if (!question || question.isDeleted || !question.isPublished) {
+      return { chatEnabled: false };
+    }
+    if (question.translations && Object.keys(question.translations).length > 0) {
+      return { chatEnabled: false };
+    }
+    const author = await this.userService.findByUsername(question.author);
+    return { chatEnabled: !!author?.aiConfig };
+  }
+
+  /**
+   * 对话式问卷一轮请求的校验与上下文组装（可抛 HTTP 异常的部分全部在此，
+   * controller 在写 SSE 头之前调用；LLM 调用由 streamChat 负责）
+   * 入参: questionId / componentId（当前停留题 fe_id）/ messages（前端维护的对话记录）
+   * 返回: { client, model, messages }——llm 消息由服务端按问卷数据重组，不透传原始 messages
+   */
+  async prepareChat(questionId: string, componentId: string, messages: unknown) {
+    if (!questionId?.trim() || !componentId?.trim() || !Array.isArray(messages)) {
+      throw new BadRequestException('参数不合法');
+    }
+
+    const question = await this.questionService.findOne(questionId);
+    if (!question || question.isDeleted) {
+      throw new NotFoundException('问卷不存在');
+    }
+    if (!question.isPublished) {
+      throw new BadRequestException('问卷尚未发布');
+    }
+
+    // 进入对话流程的仅 4 种题型（结构组件无作答）
+    const visible = (question.componentList ?? []).filter(
+      (c) =>
+        !c.isHidden &&
+        ['questionRadio', 'questionCheckbox', 'questionInput', 'questionTextarea'].includes(c.type),
+    );
+    if (visible.length === 0) {
+      throw new BadRequestException('该问卷没有可对话的题目');
+    }
+
+    // 逐条校验消息（最近 20 条），user 消息的 [答:fe_id=value]/[跳:fe_id] 前缀按问卷数据核验
+    const chatMsgs: ChatMsg[] = [];
+    const answers = new Map<string, string>();
+    const skipped = new Set<string>();
+    for (const raw of messages.slice(-20)) {
+      if (!raw || typeof raw !== 'object') {
+        throw new BadRequestException('消息数据不合法');
+      }
+      const { role, content } = raw as { role?: unknown; content?: unknown };
+      if (role !== 'assistant' && role !== 'user') {
+        throw new BadRequestException('消息数据不合法');
+      }
+      if (typeof content !== 'string' || !content.trim()) {
+        throw new BadRequestException('消息数据不合法');
+      }
+      const text = content.slice(0, 500);
+      if (role === 'user') {
+        const answerMatch = text.match(/^\[答:([^=\]]+)=([^\]]*)\]/);
+        const skipMatch = text.match(/^\[跳:([^\]]+)\]/);
+        if (answerMatch) {
+          const [, feId, value] = answerMatch;
+          const comp = visible.find((c) => c.fe_id === feId);
+          if (!comp) throw new BadRequestException('消息数据不合法');
+          if (comp.type === 'questionRadio') {
+            const opts = (comp.props as { options?: { value: string }[] }).options ?? [];
+            if (!opts.some((o) => o.value === value)) {
+              throw new BadRequestException('消息数据不合法');
+            }
+          } else if (comp.type === 'questionCheckbox') {
+            const list = (comp.props as { list?: { value: string }[] }).list ?? [];
+            const vals = value.split(',');
+            if (!value || !vals.every((v) => list.some((o) => o.value === v))) {
+              throw new BadRequestException('消息数据不合法');
+            }
+          } else if (!value.trim()) {
+            throw new BadRequestException('消息数据不合法');
+          }
+          answers.set(feId, value);
+        } else if (skipMatch) {
+          const comp = visible.find((c) => c.fe_id === skipMatch[1]);
+          if (!comp || comp.isLocked) {
+            throw new BadRequestException('消息数据不合法');
+          }
+          skipped.add(skipMatch[1]);
+        }
+        // 无前缀的 user 消息放行（仅作对话上下文，不影响服务端推导的已答状态）
+      }
+      chatMsgs.push({ role, content: text });
+    }
+
+    const curIndex = visible.findIndex((c) => c.fe_id === componentId);
+    if (curIndex === -1) {
+      throw new BadRequestException('参数不合法');
+    }
+
+    // 组装 user prompt：题目列表（含服务端推导的作答状态）+ 对话记录 + 当前任务
+    const typeLabels: Record<string, string> = {
+      questionRadio: '单选',
+      questionCheckbox: '多选',
+      questionInput: '单行输入',
+      questionTextarea: '多行输入',
+    };
+    const lines = visible.map((c, i) => {
+      const title = (c.props as { title?: string }).title ?? '';
+      let optTexts = '';
+      if (c.type === 'questionRadio') {
+        const opts = (c.props as { options?: { text: string }[] }).options ?? [];
+        if (opts.length) optTexts = ` 选项: ${opts.map((o) => o.text).join('/')}`;
+      } else if (c.type === 'questionCheckbox') {
+        const list = (c.props as { list?: { text: string }[] }).list ?? [];
+        if (list.length) optTexts = ` 选项: ${list.map((o) => o.text).join('/')}`;
+      }
+      const status = answers.has(c.fe_id)
+        ? `已答: ${answers.get(c.fe_id)}`
+        : skipped.has(c.fe_id)
+          ? '已跳过'
+          : '待问';
+      return `${i + 1}. [${typeLabels[c.type]}][${c.isLocked ? '必答' : '选答'}] ${title}${optTexts} —— ${status}`;
+    });
+
+    // 当前停留题已答 = 追问判定轮（用户刚答过此题）；未答 = 正常问此题
+    const taskLine = answers.has(componentId)
+      ? `当前待问: 第 ${curIndex + 1} 题（用户刚回答过，可就其答案追问一次并以 [[STAY]] 结尾，或直接问之后的题目；若剩余题目都无需再问，以 [[END]] 结尾收尾）`
+      : `当前待问: 第 ${curIndex + 1} 题，请开始问这一题`;
+
+    const history = chatMsgs
+      .map((m) => `${m.role === 'assistant' ? '访谈员' : '答卷人'}: ${m.content}`)
+      .join('\n');
+
+    const userPrompt = `问卷标题: ${question.title ?? ''}\n\n题目列表:\n${lines.join('\n')}\n\n对话记录:\n${history || '（无）'}\n\n${taskLine}`;
+
+    const { apiKey, baseUrl, model } = await this.requireAuthorAiConfig(question);
+    return {
+      client: this.createClient(apiKey, baseUrl),
+      model,
+      messages: [
+        { role: 'system', content: CHAT_SYSTEM_PROMPT },
+        { role: 'user', content: userPrompt },
+      ] as ChatCompletionMessageParam[],
+    };
+  }
+
+  /**
+   * 对话式问卷的流式调用：LLM 输出经标记解析状态机后逐段产出
+   * delta（正文）/ meta（STAY/END/SKIP 指令）；供应商不支持 stream 时降级一次性返回。
+   * 流中错误不抛异常（SSE 响应已开始），以 error 项下发
+   */
+  async *streamChat(
+    client: OpenAI,
+    model: string,
+    messages: ChatCompletionMessageParam[],
+  ): AsyncGenerator<ChatStreamItem> {
+    let buffer = '';
+    let pendingMeta: NonNullable<ChatStreamItem['meta']> | undefined;
+
+    const parseMeta = (token: string): NonNullable<ChatStreamItem['meta']> | null => {
+      if (token === '[[END]]') return { end: true };
+      if (token === '[[STAY]]') return { stay: true };
+      const m = token.match(/^\[\[SKIP:(\d+)\]\]$/);
+      if (m) return { skip: Number(m[1]) };
+      return null;
+    };
+
+    // 从 buffer 头部安全切出可下发正文；疑似标记的部分 hold 住等待闭合
+    const emitSafe = (): string => {
+      const idx = buffer.indexOf('[[');
+      if (idx === -1) {
+        const out = buffer;
+        buffer = '';
+        return out;
+      }
+      const out = buffer.slice(0, idx);
+      const rest = buffer.slice(idx);
+      const closeIdx = rest.indexOf(']]');
+      if (closeIdx === -1) {
+        // 未闭合：短则 hold 等待更多 chunk，过长则判定为正文（标记最长 [[SKIP:99]]）
+        if (rest.length > 20) {
+          buffer = rest.slice(1);
+          return out + '[';
+        }
+        buffer = rest;
+        return out;
+      }
+      const token = rest.slice(0, closeIdx + 2);
+      const meta = parseMeta(token);
+      if (meta) {
+        pendingMeta = meta;
+        buffer = rest.slice(closeIdx + 2);
+        return out;
+      }
+      // 形如 [[xx]] 但不是合法标记：'[[' 作为正文
+      buffer = rest.slice(2);
+      return out + '[[';
+    };
+
+    try {
+      try {
+        const stream = await client.chat.completions.create({
+          model,
+          messages,
+          temperature: 0.7,
+          stream: true,
+        });
+        for await (const chunk of stream) {
+          buffer += chunk.choices[0]?.delta?.content ?? '';
+          const safe = emitSafe();
+          if (safe) yield { delta: safe };
+        }
+      } catch (err) {
+        // 个别供应商不支持 stream 参数：降级为非流式，全文当一个 delta（前端无需感知）
+        if (err instanceof BadRequestError && /stream/i.test(String(err.message))) {
+          const completion = await client.chat.completions.create({
+            model,
+            messages,
+            temperature: 0.7,
+          });
+          buffer = completion.choices[0]?.message?.content ?? '';
+          const safe = emitSafe();
+          if (safe) yield { delta: safe };
+        } else {
+          throw err;
+        }
+      }
+
+      // 流结束：处理 buffer 残余（可能是闭合的标记 + 尾随正文）
+      if (buffer) {
+        const m = buffer.match(/^\[\[(SKIP:\d+|END|STAY)\]\]/);
+        if (m) {
+          pendingMeta = parseMeta(m[0]) ?? pendingMeta;
+          const rest = buffer.slice(m[0].length);
+          if (rest) yield { delta: rest };
+        } else {
+          yield { delta: buffer };
+        }
+        buffer = '';
+      }
+      if (pendingMeta) yield { meta: pendingMeta };
+    } catch (err) {
+      yield { error: this.mapLlmError(err).message };
+    }
+  }
+
+  // 取问卷作者的 AI 配置（对话式问卷匿名使用作者 Key；问卷状态校验由调用方完成）
+  private async requireAuthorAiConfig(question: {
+    author: string;
+  }) {
+    const author = await this.userService.findByUsername(question.author);
+    if (!author?.aiConfig) {
+      throw new BadRequestException('该问卷未开启 AI 对话');
+    }
+    return author.aiConfig;
   }
 
   // 开放题答案预处理管道（summarizeAnswers 与 analyzeReport 共用）：
