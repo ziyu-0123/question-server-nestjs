@@ -528,7 +528,7 @@ export class AiService {
   async prepareInterviewStream(
     questionId: string,
     history: { role: string; content: string }[],
-  ): Promise<(onDelta: (text: string) => void) => Promise<void>> {
+  ): Promise<(onDelta: (text: string) => void) => Promise<boolean>> {
     if (!questionId?.trim()) {
       throw new BadRequestException('参数不合法');
     }
@@ -553,7 +553,7 @@ export class AiService {
     const client = this.createClient(apiKey, baseUrl);
 
     return async (onDelta) => {
-      await this.chatStream(client, model, messages, onDelta);
+      return await this.chatStream(client, model, messages, onDelta);
     };
   }
 
@@ -639,6 +639,7 @@ ${outline.length > 0 ? outline.map((q, i) => `${i + 1}. ${q}`).join('\n') : '（
 【访谈规则】
 - 一次只问一个问题，等受访者回答后再继续
 - 按提纲顺序推进，提纲问完后做简短总结并礼貌结束
+- 提纲问完并完成收尾总结后，在回复末尾输出 [[END]] 标记（不要输出任何其他内容）
 - 结合受访者回答适当追问细节，但不偏离主题
 - 语气自然、友善、口语化，使用简体中文
 - 不要重复已经问过的问题`;
@@ -658,23 +659,43 @@ ${outline.length > 0 ? outline.map((q, i) => `${i + 1}. ${q}`).join('\n') : '（
   }
 
   // 流式调用 LLM：逐 chunk 回调增量文本（访谈用，非 JSON 模式）
+  // 检测结束标记 [[END]]（提纲问完收尾后 AI 输出），剥离标记并返回是否结束
   private async chatStream(
     client: OpenAI,
     model: string,
     messages: ChatCompletionMessageParam[],
     onDelta: (text: string) => void,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const END_MARK = '[[END]]';
     const stream = await client.chat.completions.create({
       model,
       messages,
       stream: true,
     });
+    let buffer = '';
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content ?? '';
-      if (delta) {
-        onDelta(delta);
+      if (!delta) continue;
+      buffer += delta;
+
+      const idx = buffer.indexOf(END_MARK);
+      if (idx !== -1) {
+        const before = buffer.slice(0, idx);
+        if (before) onDelta(before);
+        return true;
+      }
+
+      // 保留末尾最多 END_MARK.length-1 个字符，防止结束标记被 chunk 截断
+      const safeLen = Math.max(0, buffer.length - (END_MARK.length - 1));
+      if (safeLen > 0) {
+        onDelta(buffer.slice(0, safeLen));
+        buffer = buffer.slice(safeLen);
       }
     }
+    if (buffer) {
+      onDelta(buffer);
+    }
+    return false;
   }
 
   // 开放题答案预处理管道（summarizeAnswers 与 analyzeReport 共用）：

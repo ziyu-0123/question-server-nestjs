@@ -133,9 +133,13 @@ export class AiController {
     res.flushHeaders();
 
     try {
-      await stream((text) => {
+      const finished = await stream((text) => {
         res.write(`data: ${JSON.stringify(text)}\n\n`);
       });
+      // 访谈结束（提纲问完收尾），通知前端启用结束按钮
+      if (finished) {
+        res.write('event: finished\ndata: {}\n\n');
+      }
       res.write('data: [DONE]\n\n');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'AI 请求失败';
