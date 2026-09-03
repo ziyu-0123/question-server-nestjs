@@ -70,4 +70,21 @@ export class AiController {
       body?.componentId,
     );
   }
+
+  /**
+   * AI 生成整卷分析报告（总体结论 + 每题洞察 + 改进建议，纯生成，不落库）
+   * 入参: Body { questionId: 问卷 id }，需登录（Bearer token，须为问卷作者）
+   * 返回: { overview, insights: [{ question, finding, chartDesc }], suggestions: string[] }
+   * 错误: 400 参数不合法 / 请先配置 / 暂无答卷；403 非问卷作者；404 问卷不存在
+   */
+  @Post('analyze-report')
+  async analyzeReport(
+    @Req() req: Request & { user: { username: string } },
+    @Body() body: { questionId: string },
+  ) {
+    return await this.aiService.analyzeReport(
+      req.user.username,
+      body?.questionId,
+    );
+  }
 }

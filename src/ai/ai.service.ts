@@ -13,9 +13,11 @@ import {
   propsSchemas,
   translateQuestionSchema,
   summarizeAnswersSchema,
+  reportSchema,
   type GenerateQuestionResult,
   type TranslateQuestionResult,
   type SummarizeAnswersResult,
+  type ReportResult,
   type ComponentInput,
 } from './schemas/generate-question.schema.js';
 
@@ -134,6 +136,25 @@ const SUMMARIZE_SYSTEM_PROMPT = `你是问卷数据分析助手，负责对开�
 - 灌水、纯符号、无实际观点的答案归入一个"无有效观点"类正常输出
 - themes 各 count 之和 ≈ totalCount；sentiment 三项之和 ≈ totalCount（按对答案的整体理解估算，允许小幅出入）
 - 全部使用简体中文；不要发明答案中没有的信息`;
+
+const REPORT_SYSTEM_PROMPT = `你是问卷数据分析专家，负责综合整卷统计数据生成解读报告。
+
+【输出契约】
+只输出一个 JSON 对象，结构为：
+{
+  "overview": "总体结论（150 字以内：答卷规模、总体倾向、最突出的问题）",
+  "insights": [
+    { "question": "题干", "finding": "该题核心发现（必须引用具体数字，如'60% 表示不满意'）", "chartDesc": "一句话图表呈现建议（如'建议用饼图展示三项占比'）" },
+    ...
+  ],
+  "suggestions": ["改进建议（具体可操作）", ...]
+}
+禁止输出 JSON 以外的任何文字（包括解释、markdown 代码块标记）。
+
+【分析规则】
+- insights 按题目顺序，每道有数据的题一条；开放题结合答案原声归纳
+- suggestions 2~4 条，针对最突出的问题，具体可操作
+- 全部使用简体中文；只能引用输入中给出的数字与答案，不要发明数据`;
 
 @Injectable()
 export class AiService {
@@ -282,37 +303,14 @@ export class AiService {
       pageSize: answerTotal,
     });
 
-    // key=答案原文；order 记录最后一次出现的顺序（越大越新），用于"取最新"
-    const merged = new Map<string, { text: string; repeat: number; order: number }>();
-    let order = 0;
-    for (const answer of answers) {
-      for (const item of answer.answerList ?? []) {
-        if (item.componentId !== componentId) continue;
-        const text = (item.value ?? '').trim();
-        if (!text) continue;
-        order++;
-        const existing = merged.get(text);
-        if (existing) {
-          existing.repeat++;
-          existing.order = order;
-        } else {
-          merged.set(text, { text, repeat: 1, order });
-        }
-      }
-    }
-
-    // totalCount 含重复（与统计页表格行数一致），是给模型和前端的口径
-    const totalCount = [...merged.values()].reduce(
-      (sum, item) => sum + item.repeat,
-      0,
+    const { items, totalCount } = this._collectOpenTextAnswers(
+      answers,
+      componentId,
+      200,
     );
     if (totalCount === 0) {
       throw new BadRequestException('该题目暂无有效答案');
     }
-    const items = [...merged.values()]
-      .sort((a, b) => b.order - a.order)
-      .slice(0, 200)
-      .map((item) => ({ text: item.text.slice(0, 200), repeat: item.repeat }));
 
     const { apiKey, baseUrl, model } = await this.requireAiConfig(username);
     const title = (comp.props as { title?: string })?.title ?? '';
@@ -338,6 +336,161 @@ export class AiService {
       messages,
       summarizeAnswersSchema,
     );
+  }
+
+  /**
+   * AI 生成整卷分析报告（总体结论 + 每题洞察 + 改进建议，纯生成，不落库）
+   * 入参: username（登录态用户，须为问卷作者）、questionId
+   * 返回: { overview, insights: [{ question, finding, chartDesc }], suggestions }
+   */
+  async analyzeReport(username: string, questionId: string): Promise<ReportResult> {
+    if (!questionId?.trim()) {
+      throw new BadRequestException('参数不合法');
+    }
+
+    const question = await this.questionService.findOne(questionId);
+    if (!question) {
+      throw new NotFoundException('问卷不存在');
+    }
+    if (question.author !== username) {
+      throw new ForbiddenException('无权操作该问卷');
+    }
+
+    const answerTotal = await this.answerService.count(questionId);
+    if (answerTotal === 0) {
+      throw new BadRequestException('暂无答卷');
+    }
+    // 拉库一次取全量答卷，后续各题在内存中过滤
+    const answers = await this.answerService.findAll(questionId, {
+      page: 1,
+      pageSize: answerTotal,
+    });
+
+    // 按题目顺序组织全卷数据（隐藏组件不进报告，口径与统计页一致）
+    const sections: string[] = [];
+    let questionIndex = 0;
+    for (const comp of question.componentList ?? []) {
+      if (comp.isHidden) continue;
+      if (
+        comp.type !== 'questionRadio' &&
+        comp.type !== 'questionCheckbox' &&
+        comp.type !== 'questionInput' &&
+        comp.type !== 'questionTextarea'
+      ) {
+        continue; // 结构组件（信息/标题/段落）无统计数据
+      }
+
+      questionIndex++;
+      const title = (comp.props as { title?: string })?.title ?? '';
+      const typeLabel =
+        comp.type === 'questionRadio'
+          ? '单选'
+          : comp.type === 'questionCheckbox'
+            ? '多选'
+            : comp.type === 'questionInput'
+              ? '单行输入'
+              : '多行输入';
+
+      if (comp.type === 'questionRadio' || comp.type === 'questionCheckbox') {
+        // 选择题：value → text 映射后按选项文案确定性计数
+        const opts =
+          comp.type === 'questionRadio'
+            ? ((comp.props as { options?: { value: string; text: string }[] })?.options ?? [])
+            : ((comp.props as { list?: { value: string; text: string }[] })?.list ?? []);
+        const textByValue = new Map(opts.map((o) => [o.value, o.text]));
+        const countByText = new Map<string, number>();
+        for (const answer of answers) {
+          for (const item of answer.answerList ?? []) {
+            if (item.componentId !== comp.fe_id) continue;
+            const vals = item.value ? item.value.split(',') : [];
+            for (const v of vals) {
+              const text = textByValue.get(v);
+              if (!text) continue;
+              countByText.set(text, (countByText.get(text) ?? 0) + 1);
+            }
+          }
+        }
+        const parts = [...countByText.entries()].map(
+          ([text, count]) =>
+            `${text}: ${count}（${Math.round((count / answerTotal) * 100)}%）`,
+        );
+        sections.push(
+          `【第 ${questionIndex} 题】（${typeLabel}）${title}——共 ${answerTotal} 份答卷\n  ${parts.join(' | ')}`,
+        );
+      } else {
+        // 开放题：复用预处理管道（每题限量 100 条去重）
+        const { items, totalCount } = this._collectOpenTextAnswers(
+          answers,
+          comp.fe_id,
+          100,
+        );
+        const lines = items
+          .map(
+            (item, i) =>
+              `  ${i + 1}. ${JSON.stringify(item.text)}${item.repeat > 1 ? `（出现 ${item.repeat} 次）` : ''}`,
+          )
+          .join('\n');
+        sections.push(
+          `【第 ${questionIndex} 题】（${typeLabel}）${title}——有效答案 ${totalCount} 条${lines ? '\n' + lines : ''}`,
+        );
+      }
+    }
+
+    const { apiKey, baseUrl, model } = await this.requireAiConfig(username);
+
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: REPORT_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `问卷标题：${question.title ?? ''}\n问卷描述：${question.desc ?? '无'}\n共 ${answerTotal} 份答卷。\n\n各题统计数据：\n${sections.join('\n')}`,
+      },
+    ];
+
+    return await this.chatWithRetry(
+      this.createClient(apiKey, baseUrl),
+      model,
+      messages,
+      reportSchema,
+    );
+  }
+
+  // 开放题答案预处理管道（summarizeAnswers 与 analyzeReport 共用）：
+  // trim 过滤空串 → 相同文本合并计数（order 记最后一次出现顺序，取最新）→ 限量 → 每条截 200 字
+  // totalCount 含重复（与统计页口径一致）；items 为去重后的限量条目
+  private _collectOpenTextAnswers(
+    answers: { answerList?: { componentId: string; value: string }[] }[],
+    componentId: string,
+    limit: number,
+  ): { items: { text: string; repeat: number }[]; totalCount: number } {
+    // key=答案原文；order 记录最后一次出现的顺序（越大越新），用于"取最新"
+    const merged = new Map<string, { text: string; repeat: number; order: number }>();
+    let order = 0;
+    for (const answer of answers) {
+      for (const item of answer.answerList ?? []) {
+        if (item.componentId !== componentId) continue;
+        const text = (item.value ?? '').trim();
+        if (!text) continue;
+        order++;
+        const existing = merged.get(text);
+        if (existing) {
+          existing.repeat++;
+          existing.order = order;
+        } else {
+          merged.set(text, { text, repeat: 1, order });
+        }
+      }
+    }
+
+    const totalCount = [...merged.values()].reduce(
+      (sum, item) => sum + item.repeat,
+      0,
+    );
+    const items = [...merged.values()]
+      .sort((a, b) => b.order - a.order)
+      .slice(0, limit)
+      .map((item) => ({ text: item.text.slice(0, 200), repeat: item.repeat }));
+
+    return { items, totalCount };
   }
 
   // 读取用户 AI 配置，未配置时抛出带引导的 400

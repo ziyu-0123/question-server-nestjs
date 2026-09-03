@@ -113,4 +113,23 @@ export const summarizeAnswersSchema = z.object({
 
 export type SummarizeAnswersResult = z.infer<typeof summarizeAnswersSchema>;
 
+// AI 分析报告的输出契约（整卷级：总体结论 + 每题洞察 + 改进建议）
+// insights 上限 20 由题目数自然约束；suggestions 允许为空（答卷太少时可能无建议）
+export const reportSchema = z.object({
+  overview: z.string().min(1),
+  insights: z
+    .array(
+      z.object({
+        question: z.string().min(1),
+        finding: z.string().min(1),
+        chartDesc: z.string(),
+      }),
+    )
+    .min(1)
+    .max(20),
+  suggestions: z.array(z.string()).max(10),
+});
+
+export type ReportResult = z.infer<typeof reportSchema>;
+
 export type ComponentInput = z.infer<typeof componentSchema>;
