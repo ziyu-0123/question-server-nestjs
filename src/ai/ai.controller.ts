@@ -144,4 +144,21 @@ export class AiController {
       res.end();
     }
   }
+
+  /**
+   * AI 总结访谈答卷（整卷主题聚类 + 情感，纯生成，不落库）
+   * 入参: Body { questionId }，需登录（Bearer token，须为问卷作者）
+   * 返回: { summary, totalCount, themes: [{ label, count, description }], sentiment }
+   * 错误: 400 参数不合法 / 请先配置 / 不是访谈问卷 / 暂无访谈答卷；403 非作者；404 问卷不存在
+   */
+  @Post('summarize-interview')
+  async summarizeInterview(
+    @Req() req: Request & { user: { username: string } },
+    @Body() body: { questionId: string },
+  ) {
+    return await this.aiService.summarizeInterview(
+      req.user.username,
+      body?.questionId,
+    );
+  }
 }

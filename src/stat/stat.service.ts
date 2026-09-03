@@ -167,4 +167,27 @@ export class StatService {
 
     return list;
   }
+
+  // 访谈答卷列表：每份答卷返回完整聊天记录（统计端访谈视图用）
+  async getInterviewAnswerList(
+    questionId: string,
+    opt: { page: number; pageSize: number },
+  ) {
+    const noData = { list: [], total: 0 };
+    if (!questionId) {
+      return noData;
+    }
+    const q = await this.questionService.findOne(questionId);
+    if (q == null) {
+      return noData;
+    }
+    const total = await this.answerService.count(questionId);
+    if (total === 0) return noData;
+    const answers = await this.answerService.findAll(questionId, opt);
+    const list = answers.map((a) => ({
+      _id: a._id,
+      conversationList: a.conversationList ?? [],
+    }));
+    return { list, total };
+  }
 }

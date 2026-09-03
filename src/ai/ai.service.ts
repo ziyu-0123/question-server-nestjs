@@ -170,6 +170,26 @@ const INTERVIEW_OUTLINE_SYSTEM_PROMPT = `你是专业访谈提纲设计师，根
 - 问题口语化、中立无引导倾向，适合访谈场景
 - 全部使用简体中文`;
 
+const INTERVIEW_SUMMARY_SYSTEM_PROMPT = `你是访谈数据分析助手，负责对多份访谈的聊天记录做主题聚类和情感分析。
+
+【输出契约】
+只输出一个 JSON 对象，结构为：
+{
+  "summary": "一段话总体结论（100 字以内，概括受访者的主要观点和倾向）",
+  "totalCount": 参与分析的访谈答卷份数（即输入中标注的 totalCount，原样返回）",
+  "themes": [
+    { "label": "主题类别名（10 字以内）", "count": 提及该主题的访谈份数, "description": "该主题概述，并摘录 1~2 条典型原话" },
+    ...
+  ],
+  "sentiment": { "positive": 正面倾向份数, "negative": 负面倾向份数, "neutral": 中性倾向份数 }
+}
+禁止输出 JSON 以外的任何文字（包括解释、markdown 代码块标记）。
+
+【分析规则】
+- themes 聚 3~6 类，按 count 从大到小排列；count 为该主题被提及的访谈份数（估算）
+- sentiment 三项之和 ≈ totalCount（按每份访谈的整体倾向估算）
+- 全部使用简体中文；不要发明记录中没有的信息`;
+
 @Injectable()
 export class AiService {
   constructor(
@@ -535,6 +555,66 @@ export class AiService {
     return async (onDelta) => {
       await this.chatStream(client, model, messages, onDelta);
     };
+  }
+
+  /**
+   * AI 总结访谈答卷（整卷主题聚类 + 情感，纯生成，不落库）
+   * 入参: username（登录态用户，须为问卷作者）、questionId
+   * 返回: { summary, totalCount, themes, sentiment }（复用 summarizeAnswersSchema）
+   * 错误: 400 参数不合法 / 不是访谈问卷 / 暂无访谈答卷 / 请先配置；403 非作者；404 问卷不存在
+   */
+  async summarizeInterview(
+    username: string,
+    questionId: string,
+  ): Promise<SummarizeAnswersResult> {
+    if (!questionId?.trim()) {
+      throw new BadRequestException('参数不合法');
+    }
+    const question = await this.questionService.findOne(questionId);
+    if (!question) {
+      throw new NotFoundException('问卷不存在');
+    }
+    if (question.author !== username) {
+      throw new ForbiddenException('无权操作该问卷');
+    }
+    if (question.type !== 'interview') {
+      throw new BadRequestException('该问卷不是访谈问卷');
+    }
+
+    const total = await this.answerService.count(questionId);
+    if (total === 0) {
+      throw new BadRequestException('暂无访谈答卷');
+    }
+    const answers = await this.answerService.findAll(questionId, {
+      page: 1,
+      pageSize: total,
+    });
+
+    const { apiKey, baseUrl, model } = await this.requireAiConfig(username);
+
+    const interviewTexts = answers
+      .map((a, i) => {
+        const lines = (a.conversationList ?? []).map(
+          (m) => `${m.role === 'interviewer' ? '访谈员' : '受访者'}：${m.content}`,
+        );
+        return `【访谈 ${i + 1}】\n${lines.join('\n')}`;
+      })
+      .join('\n\n');
+
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: INTERVIEW_SUMMARY_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `访谈主题：${question.title ?? ''}\n共 ${total} 份访谈答卷。\n\n${interviewTexts}`,
+      },
+    ];
+
+    return await this.chatWithRetry(
+      this.createClient(apiKey, baseUrl),
+      model,
+      messages,
+      summarizeAnswersSchema,
+    );
   }
 
   // 组织访谈对话的 messages：system 含主题/提纲/规则，user 含对话历史或开场指令
