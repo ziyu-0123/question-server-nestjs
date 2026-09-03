@@ -132,4 +132,11 @@ export const reportSchema = z.object({
 
 export type ReportResult = z.infer<typeof reportSchema>;
 
+// AI 生成访谈提纲的输出契约（引导问题列表）
+export const generateInterviewOutlineSchema = z.object({
+  outline: z.array(z.string().min(1)).min(3).max(8),
+});
+
+export type GenerateInterviewOutlineResult = z.infer<typeof generateInterviewOutlineSchema>;
+
 export type ComponentInput = z.infer<typeof componentSchema>;

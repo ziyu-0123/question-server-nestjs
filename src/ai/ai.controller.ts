@@ -87,4 +87,22 @@ export class AiController {
       body?.questionId,
     );
   }
+
+  /**
+   * AI 生成访谈提纲（纯生成，不落库）
+   * 入参: Body { title: 访谈标题, desc: 访谈描述 }，需登录（Bearer token）
+   * 返回: { outline: string[] }
+   * 错误: 400 请填写访谈标题 / 请先配置 AI 模型
+   */
+  @Post('generate-interview-outline')
+  async generateInterviewOutline(
+    @Req() req: Request & { user: { username: string } },
+    @Body() body: { title: string; desc: string },
+  ) {
+    return await this.aiService.generateInterviewOutline(
+      req.user.username,
+      body?.title,
+      body?.desc,
+    );
+  }
 }

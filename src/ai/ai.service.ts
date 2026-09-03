@@ -14,10 +14,12 @@ import {
   translateQuestionSchema,
   summarizeAnswersSchema,
   reportSchema,
+  generateInterviewOutlineSchema,
   type GenerateQuestionResult,
   type TranslateQuestionResult,
   type SummarizeAnswersResult,
   type ReportResult,
+  type GenerateInterviewOutlineResult,
   type ComponentInput,
 } from './schemas/generate-question.schema.js';
 
@@ -155,6 +157,18 @@ const REPORT_SYSTEM_PROMPT = `你是问卷数据分析专家，负责综合整�
 - insights 按题目顺序，每道有数据的题一条；开放题结合答案原声归纳
 - suggestions 2~4 条，针对最突出的问题，具体可操作
 - 全部使用简体中文；只能引用输入中给出的数字与答案，不要发明数据`;
+
+const INTERVIEW_OUTLINE_SYSTEM_PROMPT = `你是专业访谈提纲设计师，根据访谈目标设计引导问题清单。
+
+【输出契约】
+只输出一个 JSON 对象，结构为：
+{ "outline": ["问题1", "问题2", ...] }
+禁止输出 JSON 以外的任何文字（包括解释、markdown 代码块标记）。
+
+【设计规则】
+- 产出 5~8 个开放式引导问题，层层递进、覆盖关键维度
+- 问题口语化、中立无引导倾向，适合访谈场景
+- 全部使用简体中文`;
 
 @Injectable()
 export class AiService {
@@ -451,6 +465,37 @@ export class AiService {
       model,
       messages,
       reportSchema,
+    );
+  }
+
+  /**
+   * AI 生成访谈提纲（纯生成，不落库）
+   * 入参: username（登录态用户）、title（访谈标题）、desc（访谈描述）
+   * 返回: { outline: string[] }
+   */
+  async generateInterviewOutline(
+    username: string,
+    title: string,
+    desc: string,
+  ): Promise<GenerateInterviewOutlineResult> {
+    if (!title?.trim()) {
+      throw new BadRequestException('请填写访谈标题');
+    }
+    const { apiKey, baseUrl, model } = await this.requireAiConfig(username);
+
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: INTERVIEW_OUTLINE_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `访谈标题：${title.trim()}\n访谈描述：${desc?.trim() || '无'}\n请为以上访谈设计提纲。`,
+      },
+    ];
+
+    return await this.chatWithRetry(
+      this.createClient(apiKey, baseUrl),
+      model,
+      messages,
+      generateInterviewOutlineSchema,
     );
   }
 
