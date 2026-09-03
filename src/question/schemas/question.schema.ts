@@ -20,6 +20,13 @@ export interface QuestionTranslation {
   };
 }
 
+// 访谈配置（嵌套文档需独立 @Schema 类，避免内联对象触发 CannotDetermineTypeError）
+@Schema()
+export class InterviewConfig {
+  @Prop({ type: [String], default: [] })
+  outline: string[];
+}
+
 export type QuestionDocument = HydratedDocument<Question>;
 
 @Schema({
@@ -53,7 +60,15 @@ export class Question {
   @Prop({ required: true })
   author: string;
 
-  @Prop({ required: true })
+  // 问卷类型：survey（拖拽问卷，默认）/ interview（AI 访谈）
+  @Prop({ default: 'survey' })
+  type: 'survey' | 'interview';
+
+  // 访谈配置（仅 interview 类型使用）
+  @Prop({ type: InterviewConfig })
+  interviewConfig?: InterviewConfig;
+
+  @Prop()
   componentList: {
     fe_id: string;
     type: string;

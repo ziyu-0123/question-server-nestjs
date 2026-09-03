@@ -29,9 +29,12 @@ export class QuestionController {
   // }
 
   @Post()
-  create(@Req() req: Request & { user: { username: string } }) {
+  create(
+    @Req() req: Request & { user: { username: string } },
+    @Body() body: { type?: 'survey' | 'interview' },
+  ) {
     const { username } = req.user;
-    return this.questionService.create(username);
+    return this.questionService.create(username, body?.type);
   }
 
   @Get()

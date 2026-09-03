@@ -24,11 +24,24 @@ export class QuestionService {
     private readonly answerModel: Model<AnswerDocument>,
   ) { }
 
-  async create(username: string) {
+  async create(username: string, type: 'survey' | 'interview' = 'survey') {
+    if (type === 'interview') {
+      const question = new this.questionModel({
+        author: username,
+        title: '访谈标题' + Date.now(),
+        desc: '访谈描述',
+        type: 'interview',
+        componentList: [],
+        interviewConfig: { outline: [] },
+      });
+      return await question.save();
+    }
+
     const question = new this.questionModel({
       author: username,
       title: '问卷标题' + Date.now(),
       desc: '问卷描述',
+      type: 'survey',
       componentList: [
         {
           fe_id: nanoid(),
@@ -66,6 +79,8 @@ export class QuestionService {
     'isStar',
     'isDeleted',
     'componentList',
+    'type',
+    'interviewConfig',
   ] as const;
 
   async update(id: string, updateData: QuestionDto, author: string) {

@@ -10,4 +10,6 @@ export class QuestionDto {
   readonly isStar?: boolean;
   readonly isDeleted?: boolean;
   readonly componentList?: Question['componentList'];
+  readonly type?: Question['type'];
+  readonly interviewConfig?: Question['interviewConfig'];
 }
