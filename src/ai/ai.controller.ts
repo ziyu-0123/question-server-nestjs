@@ -1,7 +1,6 @@
-import { Controller, Post, Body, Req, Res, Get, Param, HttpCode } from '@nestjs/common';
-import { type Request, type Response } from 'express';
+import { Controller, Post, Body, Req } from '@nestjs/common';
+import { type Request } from 'express';
 import { AiService } from './ai.service.js';
-import { Public } from '../auth/decorators/public.decorator.js';
 
 @Controller('ai')
 export class AiController {
@@ -87,66 +86,5 @@ export class AiController {
       req.user.username,
       body?.questionId,
     );
-  }
-
-  /**
-   * C 端问卷页判断是否展示"AI 对话模式"入口（公开接口，无需登录）
-   * 入参: 路径参数 questionId
-   * 返回: { chatEnabled: boolean }（已发布 && 未删除 && 作者已配置 AI && 无译文）
-   * 错误: 400 参数不合法
-   */
-  @Public()
-  @Get('chat-status/:questionId')
-  async chatStatus(@Param('questionId') questionId: string) {
-    return await this.aiService.isChatEnabled(questionId);
-  }
-
-  /**
-   * 对话式问卷的一轮对话（公开接口 + 匿名限流，使用问卷作者的 AI 配置，SSE 流式响应）
-   * 入参: Body { questionId, componentId: 当前停留题 fe_id, messages: 对话记录 }
-   * 出参: text/event-stream —— event:delta 逐段问话正文 / event:meta { stay|end|skip } 指令 /
-   *       event:error { msg }（流中错误）/ 结束标记 data:[DONE]
-   * 错误（写流之前）: 400 参数或消息不合法 / 未发布 / 未开启 AI 对话 / 无可对话题目；404 问卷不存在；429 限流
-   */
-  @Public()
-  @HttpCode(200) // SSE 流式响应语义应为 200（@Post 默认 201）
-  @Post('chat')
-  async chat(
-    @Req() req: Request,
-    @Body() body: { questionId: string; componentId: string; messages: unknown },
-    @Res() res: Response,
-  ) {
-    const { questionId, componentId, messages } = body ?? {};
-
-    // 写 SSE 头之前的所有校验走正常异常通道（异常过滤器可正常改写响应）
-    const xff = req.headers['x-forwarded-for'];
-    const ip = (Array.isArray(xff) ? xff[0] : xff?.split(',')[0]) ?? req.ip ?? '';
-    this.aiService.checkRateLimit(questionId, ip);
-    const prepared = await this.aiService.prepareChat(questionId, componentId, messages);
-
-    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    const send = (event: string, data: unknown) => {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
-
-    try {
-      for await (const item of this.aiService.streamChat(
-        prepared.client,
-        prepared.model,
-        prepared.messages,
-      )) {
-        if (item.delta) send('delta', { text: item.delta });
-        if (item.meta) send('meta', item.meta);
-        if (item.error) send('error', { msg: item.error });
-      }
-    } catch {
-      send('error', { msg: 'AI 请求失败，请稍后重试' });
-    }
-    res.write('data: [DONE]\n\n');
-    res.end();
   }
 }
