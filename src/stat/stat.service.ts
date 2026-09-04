@@ -129,41 +129,16 @@ export class StatService {
       return [];
     }
 
-    // 获取答卷列表
-    const total = await this.answerService.count(questionId);
-    if (total === 0) return []; // 答卷总数量
-    const answers = await this.answerService.findAll(questionId, {
-      page: 1,
-      pageSize: total, // 获取所有的，不分页
-    });
+    // 统计下沉到数据库层：聚合管道按 value 计数，应用层只做 value → text 映射
+    const counts = await this.answerService.aggregateComponentStat(questionId, componentFeId);
 
-    // 累加各个 value 数量
-    const countInfo: Record<string, number> = {};
-    answers.forEach((a) => {
-      const { answerList = [] } = a;
-      answerList.forEach((aItem) => {
-        if (aItem.componentId !== componentFeId) return;
-        const vals = aItem.value ? aItem.value.split(',') : [];
-        vals.forEach((v) => {
-          if (countInfo[v] == null) countInfo[v] = 0;
-          countInfo[v]++; // 累加
-        });
-      });
+    const list = counts.map(({ value, count }) => {
+      const text =
+        type === 'questionRadio'
+          ? this._getRadioOptText(value, props)
+          : this._getCheckboxOptText(value, props);
+      return { name: text, count };
     });
-
-    // 整理数据
-    const list = [];
-    for (const val in countInfo) {
-      // 根据 val 计算 text
-      let text = '';
-      if (type === 'questionRadio') {
-        text = this._getRadioOptText(val, props);
-      }
-      if (type === 'questionCheckbox') {
-        text = this._getCheckboxOptText(val, props);
-      }
-      list.push({ name: text, count: countInfo[val] });
-    }
 
     return list;
   }

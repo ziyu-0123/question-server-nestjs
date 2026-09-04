@@ -43,4 +43,22 @@ export class AnswerService {
       .limit(pageSize);
     return list;
   }
+
+  // 统计选择题各 value 的答卷计数（统计下沉到数据库层，避免全量拉取到内存）
+  // 入参: questionId（问卷 id）、componentFeId（单选/多选组件 fe_id）
+  // 返回: [{ value: 'item1', count: 3 }, ...]（多选值已按逗号拆开逐项计数）
+  async aggregateComponentStat(questionId: string, componentFeId: string) {
+    return await this.answerModel.aggregate<{ value: string; count: number }>([
+      { $match: { questionId } },
+      { $unwind: '$answerList' },
+      { $match: { 'answerList.componentId': componentFeId } },
+      // 仅统计非空字符串 value 的答案项（与旧逻辑 value ? split(',') : [] 对齐）
+      { $match: { 'answerList.value': { $type: 'string', $ne: '' } } },
+      // 多选值以逗号拼接，拆成数组后逐个计数
+      { $project: { values: { $split: ['$answerList.value', ','] } } },
+      { $unwind: '$values' },
+      { $group: { _id: '$values', count: { $sum: 1 } } },
+      { $project: { _id: 0, value: '$_id', count: 1 } },
+    ]);
+  }
 }
