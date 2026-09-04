@@ -2,7 +2,6 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Question, QuestionDocument, QuestionTranslation } from './schemas/question.schema.js';
-import { Answer, AnswerDocument } from '../answer/schemas/answer.schema.js';
 import { QuestionDto } from './dto/question.dto.js';
 import { nanoid } from 'nanoid';
 
@@ -20,8 +19,6 @@ export class QuestionService {
   constructor(
     @InjectModel(Question.name)
     private readonly questionModel: Model<QuestionDocument>,
-    @InjectModel(Answer.name)
-    private readonly answerModel: Model<AnswerDocument>,
   ) { }
 
   async create(username: string, type: 'survey' | 'interview' = 'survey') {
@@ -148,20 +145,8 @@ export class QuestionService {
       .skip((page - 1) * pageSize) //跳过前(page-1)*pageSize条数据
       .limit(pageSize);
 
-    // 动态统计每份问卷的答卷数量（answerCount 字段从未被维护，以 answers 集合实际数据为准）
-    const ids = questions.map(q => String(q._id));
-    const counts = await this.answerModel
-      .aggregate<{ _id: string; count: number }>([
-        { $match: { questionId: { $in: ids } } },
-        { $group: { _id: '$questionId', count: { $sum: 1 } } },
-      ])
-      .exec();
-    const countMap = new Map(counts.map(c => [c._id, c.count]));
-
-    return questions.map(q => {
-      const obj = q.toObject();
-      return { ...obj, answerCount: countMap.get(String(q._id)) ?? 0 };
-    });
+    // 直接读取反范式维护的 answerCount（提交答卷时 $inc 维护）
+    return questions.map(q => q.toObject());
   }
 
   async countAll({
