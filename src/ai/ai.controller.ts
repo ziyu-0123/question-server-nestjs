@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Req, Res } from '@nestjs/common';
+import { Controller, Post, Body, Req, Res, Logger } from '@nestjs/common';
 import { type Request, type Response } from 'express';
 import { AiService } from './ai.service.js';
 import { Public } from '../auth/decorators/public.decorator.js';
@@ -132,10 +132,17 @@ export class AiController {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
+    // 客户端断开时中止上游 LLM 流式请求，避免无效 token 消耗
+    const controller = new AbortController();
+    res.on('close', () => {
+      new Logger('InterviewStream').log('客户端断开，中止上游 LLM 请求');
+      controller.abort();
+    });
+
     try {
       const finished = await stream((text) => {
         res.write(`data: ${JSON.stringify(text)}\n\n`);
-      });
+      }, controller.signal);
       // 访谈结束（提纲问完收尾），通知前端启用结束按钮
       if (finished) {
         res.write('event: finished\ndata: {}\n\n');

@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
 import { APIConnectionTimeoutError, AuthenticationError, BadRequestError } from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
@@ -528,7 +528,7 @@ export class AiService {
   async prepareInterviewStream(
     questionId: string,
     history: { role: string; content: string }[],
-  ): Promise<(onDelta: (text: string) => void) => Promise<boolean>> {
+  ): Promise<(onDelta: (text: string) => void, signal?: AbortSignal) => Promise<boolean>> {
     if (!questionId?.trim()) {
       throw new BadRequestException('参数不合法');
     }
@@ -552,8 +552,8 @@ export class AiService {
     const messages = this.buildInterviewMessages(question, history ?? []);
     const client = this.createClient(apiKey, baseUrl);
 
-    return async (onDelta) => {
-      return await this.chatStream(client, model, messages, onDelta);
+    return async (onDelta, signal) => {
+      return await this.chatStream(client, model, messages, onDelta, signal);
     };
   }
 
@@ -665,32 +665,46 @@ ${outline.length > 0 ? outline.map((q, i) => `${i + 1}. ${q}`).join('\n') : '（
     model: string,
     messages: ChatCompletionMessageParam[],
     onDelta: (text: string) => void,
+    signal?: AbortSignal,
   ): Promise<boolean> {
     const END_MARK = '[[END]]';
     const stream = await client.chat.completions.create({
       model,
       messages,
       stream: true,
+    }, { signal });
+    // 客户端断开（signal abort）时打日志，标记上游请求被中止
+    signal?.addEventListener('abort', () => {
+      new Logger('InterviewStream').log('上游 LLM 请求已中止');
     });
+
     let buffer = '';
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content ?? '';
-      if (!delta) continue;
-      buffer += delta;
+    try {
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content ?? '';
+        if (!delta) continue;
+        buffer += delta;
 
-      const idx = buffer.indexOf(END_MARK);
-      if (idx !== -1) {
-        const before = buffer.slice(0, idx);
-        if (before) onDelta(before);
-        return true;
-      }
+        const idx = buffer.indexOf(END_MARK);
+        if (idx !== -1) {
+          const before = buffer.slice(0, idx);
+          if (before) onDelta(before);
+          return true;
+        }
 
-      // 保留末尾最多 END_MARK.length-1 个字符，防止结束标记被 chunk 截断
-      const safeLen = Math.max(0, buffer.length - (END_MARK.length - 1));
-      if (safeLen > 0) {
-        onDelta(buffer.slice(0, safeLen));
-        buffer = buffer.slice(safeLen);
+        // 保留末尾最多 END_MARK.length-1 个字符，防止结束标记被 chunk 截断
+        const safeLen = Math.max(0, buffer.length - (END_MARK.length - 1));
+        if (safeLen > 0) {
+          onDelta(buffer.slice(0, safeLen));
+          buffer = buffer.slice(safeLen);
+        }
       }
+    } catch (err) {
+      // 客户端断开导致上游请求中止：静默返回，不再向上抛（res 已关闭）
+      if (signal?.aborted) {
+        return false;
+      }
+      throw err;
     }
     if (buffer) {
       onDelta(buffer);
