@@ -139,8 +139,21 @@ export class AiController {
       controller.abort();
     });
 
+    // 首 token 前的保活心跳：每 15s 发 SSE 注释行（前端忽略），避免代理/浏览器空闲超时
+    let firstTokenArrived = false;
+    const heartbeat = setInterval(() => {
+      if (!firstTokenArrived) {
+        res.write(': ping\n\n');
+      }
+    }, 15_000);
+
     try {
       const finished = await stream((text) => {
+        // 首 token 到达，停止心跳
+        if (!firstTokenArrived) {
+          firstTokenArrived = true;
+          clearInterval(heartbeat);
+        }
         res.write(`data: ${JSON.stringify(text)}\n\n`);
       }, controller.signal);
       // 访谈结束（提纲问完收尾），通知前端启用结束按钮
@@ -152,6 +165,7 @@ export class AiController {
       const message = err instanceof Error ? err.message : 'AI 请求失败';
       res.write(`event: error\ndata: ${JSON.stringify(message)}\n\n`);
     } finally {
+      clearInterval(heartbeat);
       res.end();
     }
   }
