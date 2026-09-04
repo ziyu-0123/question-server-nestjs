@@ -162,6 +162,7 @@ export class StatService {
     const list = answers.map((a) => ({
       _id: a._id,
       conversationList: a.conversationList ?? [],
+      usage: a.usage,
     }));
     return { list, total };
   }

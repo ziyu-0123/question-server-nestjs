@@ -133,10 +133,14 @@ export class AiController {
     res.flushHeaders();
 
     // 客户端断开时中止上游 LLM 流式请求，避免无效 token 消耗
+    // 注意：res 的 close 在正常 res.end() 后也会触发，用 completed 区分正常结束与提前断开
     const controller = new AbortController();
+    let completed = false;
     res.on('close', () => {
-      new Logger('InterviewStream').log('客户端断开，中止上游 LLM 请求');
-      controller.abort();
+      if (!completed) {
+        new Logger('InterviewStream').log('客户端断开，中止上游 LLM 请求');
+        controller.abort();
+      }
     });
 
     // 首 token 前的保活心跳：每 15s 发 SSE 注释行（前端忽略），避免代理/浏览器空闲超时
@@ -148,7 +152,7 @@ export class AiController {
     }, 15_000);
 
     try {
-      const finished = await stream((text) => {
+      const { finished, usage } = await stream((text) => {
         // 首 token 到达，停止心跳
         if (!firstTokenArrived) {
           firstTokenArrived = true;
@@ -160,7 +164,12 @@ export class AiController {
       if (finished) {
         res.write('event: finished\ndata: {}\n\n');
       }
+      // 本轮 token 用量返回给前端（前端累积，提交答卷时持久化）
+      if (usage) {
+        res.write(`event: usage\ndata: ${JSON.stringify(usage)}\n\n`);
+      }
       res.write('data: [DONE]\n\n');
+      completed = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'AI 请求失败';
       res.write(`event: error\ndata: ${JSON.stringify(message)}\n\n`);

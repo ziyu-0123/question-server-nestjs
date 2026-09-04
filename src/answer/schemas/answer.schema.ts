@@ -3,6 +3,19 @@ import { HydratedDocument } from 'mongoose';
 
 export type AnswerDocument = HydratedDocument<Answer>;
 
+// 单次访谈的 token 用量（嵌套文档需独立 @Schema 类，避免内联对象类型推断错误）
+@Schema()
+export class AnswerUsage {
+  @Prop({ required: true })
+  prompt: number;
+
+  @Prop({ required: true })
+  completion: number;
+
+  @Prop({ required: true })
+  total: number;
+}
+
 @Schema({ timestamps: true })
 export class Answer {
   @Prop({ required: true })
@@ -19,6 +32,9 @@ export class Answer {
     role: 'interviewer' | 'interviewee';
     content: string;
   }[];
+
+  @Prop({ type: AnswerUsage })
+  usage?: AnswerUsage;
 }
 export const AnswerSchema = SchemaFactory.createForClass(Answer);
 
