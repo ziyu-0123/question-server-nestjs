@@ -15,9 +15,15 @@ import { AiModule } from './ai/ai.module.js';
     QuestionModule,
     ConfigModule.forRoot({ isGlobal: true }),
     MongooseModule.forRootAsync({
-      useFactory: (configService: ConfigService) => ({
-        uri: `mongodb://${configService.get<string>('MONGO_HOST')}:${configService.get<string>('MONGO_PORT')}/${configService.get<string>('MONGO_DATABASE')}`,
-      }),
+      useFactory: (configService: ConfigService) => {
+        // 优先用 MONGO_URI（云库如 Atlas），否则回退到 HOST/PORT/DATABASE（本地）
+        const uri = configService.get<string>('MONGO_URI');
+        return {
+          uri:
+            uri ??
+            `mongodb://${configService.get<string>('MONGO_HOST')}:${configService.get<string>('MONGO_PORT')}/${configService.get<string>('MONGO_DATABASE')}`,
+        };
+      },
       inject: [ConfigService],
     }),
     UserModule,
