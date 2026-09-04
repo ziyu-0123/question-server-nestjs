@@ -87,3 +87,6 @@ export class Question {
 }
 
 export const QuestionSchema = SchemaFactory.createForClass(Question);
+
+// 高频访问路径：按作者查列表 + 回收站过滤 + 倒序分页（findAllList/countAll 共用）
+QuestionSchema.index({ author: 1, isDeleted: 1, _id: -1 });
