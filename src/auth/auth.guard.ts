@@ -5,7 +5,6 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { jwtConstants } from './constants.js';
 import { Request } from 'express';
 import { IS_PUBLIC_KEY } from './decorators/public.decorator.js';
 import { Reflector } from '@nestjs/core';
@@ -15,7 +14,7 @@ export class AuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly reflector: Reflector,
-  ) {}
+  ) { }
 
   async canActivate(context: ExecutionContext) {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
@@ -32,9 +31,7 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('未登录');
     }
     try {
-      const payload = await this.jwtService.verifyAsync(token, {
-        secret: jwtConstants.secret,
-      });
+      const payload = await this.jwtService.verifyAsync(token);
       request['user'] = payload;
     } catch (err) {
       throw new UnauthorizedException('Token 无效');
