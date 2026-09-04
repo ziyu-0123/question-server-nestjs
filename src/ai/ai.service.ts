@@ -669,16 +669,18 @@ ${outline.length > 0 ? outline.map((q, i) => `${i + 1}. ${q}`).join('\n') : '（
     signal?: AbortSignal,
   ): Promise<{ finished: boolean; usage?: { prompt: number; completion: number; total: number } }> {
     const END_MARK = '[[END]]';
+    // 客户端断开（signal abort）时打日志，标记上游请求被中止
+    // 注意：须在 create 前注册，否则首 token 前断开会错过 abort 事件
+    signal?.addEventListener('abort', () => {
+      new Logger('InterviewStream').log('上游 LLM 请求已中止');
+    });
+
     const stream = await client.chat.completions.create({
       model,
       messages,
       stream: true,
       stream_options: { include_usage: true },
     }, { signal });
-    // 客户端断开（signal abort）时打日志，标记上游请求被中止
-    signal?.addEventListener('abort', () => {
-      new Logger('InterviewStream').log('上游 LLM 请求已中止');
-    });
 
     let buffer = '';
     let finished = false;

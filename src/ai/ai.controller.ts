@@ -133,7 +133,7 @@ export class AiController {
     res.flushHeaders();
 
     // 客户端断开时中止上游 LLM 流式请求，避免无效 token 消耗
-    // 注意：res 的 close 在正常 res.end() 后也会触发，用 completed 区分正常结束与提前断开
+    // res 的 close 在正常 res.end() 后也会触发，用 completed 区分正常结束与提前断开
     const controller = new AbortController();
     let completed = false;
     res.on('close', () => {
