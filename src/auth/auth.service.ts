@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { UserService, maskApiKey } from '../user/user.service.js';
 import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcryptjs';
 @Injectable()
 export class AuthService {
   constructor(
@@ -9,8 +10,9 @@ export class AuthService {
   ) { }
 
   async signIn(username: string, password: string) {
-    const user = await this.userService.findOne({ username, password });
-    if (!user) {
+    const user = await this.userService.findByUsername(username);
+    // 用户不存在或密码不匹配，统一返回「用户名或密码错误」（避免泄露用户是否存在）
+    if (!user || !(await bcrypt.compare(password, user.password))) {
       throw new UnauthorizedException('用户名或密码错误');
     }
 

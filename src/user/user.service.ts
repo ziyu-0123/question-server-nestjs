@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import * as bcrypt from 'bcryptjs';
 import { User, UserDocument } from './schemas/user.schema.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { AiConfigDto } from './dto/ai-config.dto.js';
@@ -21,12 +22,10 @@ export class UserService {
   async create(userData: CreateUserDto) {
     // 只取注册业务字段入库，防止 body 夹带 aiConfig 等任意字段
     const { username, password, nickname } = userData;
-    const createdUser = new this.userModel({ username, password, nickname });
+    // 密码加盐哈希后入库，不存明文
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const createdUser = new this.userModel({ username, password: hashedPassword, nickname });
     return await createdUser.save();
-  }
-
-  async findOne(query: { username: string; password: string }) {
-    return await this.userModel.findOne(query);
   }
 
   async findByUsername(username: string) {

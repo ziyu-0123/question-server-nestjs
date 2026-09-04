@@ -11,10 +11,17 @@ import { AuthGuard } from './auth.guard.js';
     UserModule,
     JwtModule.registerAsync({
       global: true,
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'xxYx&&111',
-        signOptions: { expiresIn: '1d' },
-      }),
+      useFactory: (configService: ConfigService) => {
+        const secret = configService.get<string>('JWT_SECRET');
+        // 生产环境强制要求 JWT_SECRET，禁止用默认弱密钥兜底
+        if (process.env.NODE_ENV === 'production' && !secret) {
+          throw new Error('生产环境必须配置 JWT_SECRET 环境变量');
+        }
+        return {
+          secret: secret || 'xxYx&&111',
+          signOptions: { expiresIn: '1d' },
+        };
+      },
       inject: [ConfigService],
     }),
   ],
