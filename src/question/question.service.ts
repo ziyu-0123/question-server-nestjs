@@ -112,6 +112,7 @@ export class QuestionService {
     const res = await this.questionModel.updateOne(
       { _id: id, author },
       { $set: { [`translations.${lang}`]: translation } },
+      { timestamps: true },
     );
     if (res.matchedCount === 0) {
       // 新接口无历史包袱：非作者（或问卷不存在）显式 403，优于 update 的静默 no-op
@@ -181,6 +182,9 @@ export class QuestionService {
       author,
       isPublished: false,
       isStar: false,
+      answerCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
       // 复制时全量重新生成 fe_id，继承的 texts 全部变孤儿死数据，译文不继承
       translations: undefined,
       componentList: question.componentList.map((item) => {
